@@ -1,0 +1,180 @@
+# adif-mode
+
+An Emacs major mode for reading and editing ADIF amateur radio log files
+without corrupting them.
+
+ADIF writes the length of every value into the file itself, as
+`<CALL:4>W1AW`. Edit the callsign in a text editor and the `4` is left
+behind, describing a field that no longer exists. Loggers disagree about
+what to do with the result, and some of them quietly drop the rest of the
+record.
+
+This package keeps the two in step. Records are held as data and the file is
+written back with every length counted afresh from its own value, so a
+length in a file adif-mode has written never disagrees with what it
+describes.
+
+## Installation
+
+From [MELPA](https://melpa.org):
+
+    M-x package-install RET adif RET
+
+Emacs 25.1 or later. Nothing else is required.
+
+`.adi` and `.adif` files then open in adif-mode.
+
+## Using it
+
+Opening a log shows one line per QSO:
+
+    ADIF Log: /home/dave/qsolog.adi   [1482 records]
+
+    Date        Time    Call          Band    Mode    Name              Freq
+    ──────────  ──────  ────────────  ──────  ──────  ────────────────  ──────────
+    20240101    1200    W1AW          40m     CW      Hiram             7.030
+    20240101    1430    K6SM          20m     SSB     Dave              14.250
+
+Press `RET` on a record to edit it as a list of fields:
+
+    CALL: W1AW
+    NAME: Hiram
+    BAND: 40m
+    MODE: CW
+    PROP_MODE: ES              Sporadic E
+
+Fill anything in, add fields, remove them, save with `C-c C-c`. Lengths
+are worked out when the record is written, so they are never something to
+get right by hand.
+
+### In the log
+
+| Key       | |
+|-----------|--|
+| `RET` `e` | Edit the record at point |
+| `r`       | Edit the record's raw ADIF text |
+| `R`       | Edit the whole file as raw ADIF text |
+| `n`       | Add a record |
+| `k`       | Kill records: the region, or `C-u` for the filtered subset |
+| `M-w`     | Copy records without removing them |
+| `y`       | Yank records, including from another log |
+| `s` `S`   | Sort on any field, ascending or descending |
+| `f`       | Filter on a field; filters accumulate |
+| `C-c C-f` | Clear all filters |
+| `d`       | List duplicate QSOs |
+| `w`       | List fields whose declared length disagrees with the data |
+| `g`       | Re-read the file |
+| `C-x C-s` | Write the log, making a sort order permanent |
+| `?`       | Describe the mode |
+| `q`       | Quit |
+
+Everything above is also on the **ADIF** menu.
+
+### Editing a record
+
+| Key                 | |
+|---------------------|--|
+| `C-c C-c` `C-x C-s` | Save and return |
+| `C-c C-k`           | Discard and return |
+| `C-c C-a`           | Add a field |
+| `C-c C-w`           | Kill the field on this line |
+| `C-c C-v`           | Set this field's value by selection |
+| `TAB`               | Complete a field name or a value |
+
+## What it does
+
+**Values chosen, not typed.** BAND, MODE, SUBMODE, CONTEST_ID, DXCC,
+ARRL_SECT, PROP_MODE and the rest are offered as their valid codes with
+the plain-English meaning beside each, so `ES` shows as "Sporadic E" and
+`ARRL-FIELD-DAY` as "ARRL Field Day". Field names and values come from
+**ADIF 3.1.7**; `M-x adif-specification` reports what is loaded.
+
+**Fields in any order, and any set of them.** Records need not agree with
+one another. A record carrying only CALL and BAND sits beside one
+carrying thirty fields, and neither is disturbed by the other.
+
+**Length problems reported, never silently repaired.** A file whose
+declared lengths disagree with its data is read with the data kept exactly
+as found, and `w` lists what disagreed, by record and field. Nothing is
+truncated to fit a wrong number and no following field is swallowed by an
+over-long one.
+
+**Duplicate QSOs.** `d` lists repeats of a callsign on the same band in
+the same mode, which contests generally disallow, following any filter in
+effect. Saving a record that duplicates one already logged asks first,
+naming the record it clashes with.
+
+**Sorting and filtering.** Sort on any field: date and time together,
+numerically where the column holds numbers, as text otherwise. Filter on
+any field, including ones absent from the columns and ones no record
+carries. Filters accumulate, and both are views — the log itself is
+untouched until you write it.
+
+**Building a log from others.** Filter to what you want, `C-u M-w` to
+copy the lot, then `M-x adif-create-file` and `y`. The kill ring is
+shared between ADIF buffers.
+
+**Backs up before every write.** A QSO lost from a log cannot be worked
+again, so the previous contents are kept aside each time the file is
+written — whatever `make-backup-files` says, since that is usually turned
+off for files one can regenerate. Where the copy goes and how many are
+kept follow the ordinary Emacs backup settings; `(setq version-control t
+kept-new-versions 10)` gives ten numbered backups rather than one.
+
+**Follows the file.** The summary refreshes when the log changes on disk,
+whoever wrote it, and a write checks the file's modification time first,
+so a QSO logged by another program while you were editing cannot be
+overwritten unnoticed.
+
+## Configuration
+
+`M-x customize-group RET adif RET`, or:
+
+| Option | |
+|--------|--|
+| `adif-summary-columns` | Which fields appear as columns, their widths and headings |
+| `adif-new-record-fields` | Fields a new record starts with |
+| `adif-new-record-defaults` | Values they start from — put your callsign in OPERATOR |
+| `adif-duplicate-fields` | What makes two QSOs duplicates. Default CALL, BAND, MODE |
+| `adif-require-known-values` | `confirm` (default), `strict` or `free` |
+| `adif-filter-match` | `substring` (default), `exact` or `regexp` |
+| `adif-backup` | Keep the previous contents before each write. Default on |
+| `adif-auto-revert` | Follow the file on disk. Default on |
+| `adif-warn-on-duplicate` | Ask before saving a duplicate. Default on |
+| `adif-show-warnings-on-open` | Show the length report when a log has problems |
+| `adif-field-values-extra` | Add or override enumerations |
+
+On a small machine such as a Raspberry Pi Zero, setting
+`auto-revert-avoid-polling` to `t` leaves the file watched by
+notification alone, with no periodic wakeups.
+
+## Editing the raw text
+
+`r` and `R` open the record or the whole file as ADIF text, highlighted
+so a length can be read off against the value it belongs to. Lengths are
+not maintained there — that is the point of the view — so a change to a
+value needs its `<FIELD:LENGTH>` tag corrected. A tag that no longer
+matches is refused rather than written.
+
+Changing major mode by hand is not the way to reach the text. The summary
+buffer holds a rendered table while visiting the log, so saving it would
+write the table over the QSOs; adif-mode refuses that and points at `R`.
+
+## What it deliberately does not do
+
+STATE and CNTY are not offered as lists. ADIF defines them per DXCC
+entity, some two thousand entries across eighty tables, so a flat list
+would accept an Alabama county for a Canadian contact. Offering nothing is
+better than offering something wrong; they are free text until adif-mode
+can read the record's DXCC first. AWARD and CREDIT hold comma-separated
+lists rather than single values, and are left alone for the same reason.
+
+## qso.el
+
+[qso.el](https://github.com/K6SM/Emacs-QSO-Logger) is a companion for
+logging QSOs as they happen, from the same author. Neither requires the
+other; adif-mode edits logs whatever wrote them.
+
+## License
+
+GPLv3. See [LICENSE](LICENSE).
