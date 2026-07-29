@@ -45,13 +45,14 @@
 ;;   RET / e   Edit record at point
 ;;   r         Edit the raw ADIF text of the record at point
 ;;   R         Edit the whole file as raw ADIF text
-;;   n         Add a new record, pre-filled from adif-new-record-fields
+;;   i         Insert a new record, pre-filled from adif-new-record-fields
+;;   n / p     Move to the next / previous record
 ;;   k         Kill record(s): region, or C-u for the filtered subset
 ;;   M-w       Copy record(s) without removing them
 ;;   y         Yank the most recently killed or copied records
 ;;   s / S     Sort on any field, ascending / descending
 ;;   f         Filter the view on any ADIF field
-;;   d         List duplicate QSOs
+;;   =         List duplicate QSOs
 ;;   g         Revert from disk
 ;;   C-x C-s   Write the log (makes a sort order permanent)
 ;;   w         Show length problems found when the file was parsed
@@ -59,8 +60,7 @@
 ;;   q         Quit
 ;;
 ;;   These are also on the ADIF menu.
-;;
-;;   Ordinary motion commands move between rows.
+
 ;;
 ;; Sorting:
 ;;   's' and 'S' order the log on a field chosen the way a filter field
@@ -2962,19 +2962,56 @@ editing or deleting a record writes the file by itself."
 
 ;;; ─── adif-mode ────────────────────────────────────────────────────────────────
 
+(defun adif-next-record (&optional n)
+  "Move to the Nth next record in the summary, one by default.
+
+Moves between records rather than lines, so the heading at the top of
+the buffer is stepped over, in the way `dired-next-line' moves between
+files."
+  (interactive "p")
+  (adif--move-record (or n 1)))
+
+(defun adif-previous-record (&optional n)
+  "Move to the Nth previous record in the summary, one by default."
+  (interactive "p")
+  (adif--move-record (- (or n 1))))
+
+(defun adif--move-record (n)
+  "Move N record rows, forwards when N is positive."
+  (let ((step (if (< n 0) -1 1))
+        (left (abs n))
+        (moved 0))
+    (while (> left 0)
+      (let ((start (point))
+            (found nil))
+        (while (and (not found)
+                    (zerop (forward-line step))
+                    (not (if (< step 0) (bobp) (eobp))))
+          (when (get-text-property (line-beginning-position) 'adif-record-index)
+            (setq found t)))
+        (if found
+            (setq moved (1+ moved))
+          (goto-char start)
+          (setq left 1)))
+      (setq left (1- left)))
+    (beginning-of-line)
+    moved))
+
 (defvar adif-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") #'adif-edit-record)
     (define-key map (kbd "e")   #'adif-edit-record)
     (define-key map (kbd "r")   #'adif-edit-raw-record)
     (define-key map (kbd "R")   #'adif-edit-raw-file)
-    (define-key map (kbd "n")   #'adif-new-record)
+    (define-key map (kbd "i")   #'adif-new-record)
+    (define-key map (kbd "n")   #'adif-next-record)
+    (define-key map (kbd "p")   #'adif-previous-record)
     (define-key map (kbd "k")   #'adif-kill-records)
     (define-key map (kbd "M-w") #'adif-copy-records)
     (define-key map (kbd "y")   #'adif-yank-records)
     (define-key map (kbd "C-y") #'adif-yank-records)
     (define-key map (kbd "?")   #'describe-mode)
-    (define-key map (kbd "d")   #'adif-show-duplicates)
+    (define-key map (kbd "=")   #'adif-show-duplicates)
     (define-key map (kbd "f")   #'adif-filter)
     (define-key map (kbd "C-c C-f") #'adif-filter-clear)
     (define-key map (kbd "s")   #'adif-sort-by-field)
@@ -2999,7 +3036,7 @@ editing or deleting a record writes the file by itself."
     ["Edit File as Text"        adif-edit-raw-file
      :help "Edit the whole log as raw ADIF text"]
     "--"
-    ["New Record"               adif-new-record
+    ["Insert Record"            adif-new-record
      :help "Add a record, pre-filled from adif-new-record-fields"]
     ["Kill Records"             adif-kill-records
      :help "Remove records and keep them for yanking"]

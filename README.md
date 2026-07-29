@@ -54,14 +54,15 @@ get right by hand.
 | `RET` `e` | Edit the record at point |
 | `r`       | Edit the record's raw ADIF text |
 | `R`       | Edit the whole file as raw ADIF text |
-| `n`       | Add a record |
+| `n` `p`   | Next / previous record |
+| `i`       | Insert a record |
 | `k`       | Kill records: the region, or `C-u` for the filtered subset |
 | `M-w`     | Copy records without removing them |
 | `y`       | Yank records, including from another log |
 | `s` `S`   | Sort on any field, ascending or descending |
 | `f`       | Filter on a field; filters accumulate |
 | `C-c C-f` | Clear all filters |
-| `d`       | List duplicate QSOs |
+| `=`       | List duplicate QSOs |
 | `w`       | List fields whose declared length disagrees with the data |
 | `g`       | Re-read the file |
 | `C-x C-s` | Write the log, making a sort order permanent |
@@ -99,7 +100,7 @@ as found, and `w` lists what disagreed, by record and field. Nothing is
 truncated to fit a wrong number and no following field is swallowed by an
 over-long one.
 
-**Duplicate QSOs.** `d` lists repeats of a callsign on the same band in
+**Duplicate QSOs.** `=` lists repeats of a callsign on the same band in
 the same mode, which contests generally disallow, following any filter in
 effect. Saving a record that duplicates one already logged asks first,
 naming the record it clashes with.
