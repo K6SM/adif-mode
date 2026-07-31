@@ -1,26 +1,12 @@
 # adif-mode
 
-An Emacs major mode for reading and editing ADIF amateur radio log files
-without corrupting them.
-
-ADIF writes the length of every value into the file itself, as
-`<CALL:4>W1AW`. Edit the callsign in a text editor and the `4` is left
-behind, describing a field that no longer exists. Loggers disagree about
-what to do with the result, and some of them quietly drop the rest of the
-record.
-
-This package keeps the two in step. Records are held as data and the file is
-written back with every length counted afresh from its own value, so a
-length in a file adif-mode has written never disagrees with what it
-describes.
+An Emacs major mode for reading and safely editing ADIF amateur radio log files.
 
 ## Installation
 
-From [MELPA](https://melpa.org):
-
-    M-x package-install RET adif RET
-
-Emacs 25.1 or later. Nothing else is required.
+1. Place adif.el in the load path. If one hasn't been established, you can place it in ~/.emacs.d/lisp/ and then, in the init.el file (located in ~/.emacs.d/) add: (add-to-list 'load-path "~/.emacs.d/lisp/")
+2. Add to the init.el file: (require 'adif)
+3. Restart Emacs
 
 `.adi` and `.adif` files then open in adif-mode.
 
