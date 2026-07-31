@@ -4,7 +4,8 @@ An Emacs major mode for reading and safely editing ADIF amateur radio log files.
 
 ## Installation
 
-1. Place adif.el in the load path. If one hasn't been established, you can place it in ~/.emacs.d/lisp/ and then, in the init.el file (located in ~/.emacs.d/) add: (add-to-list 'load-path "~/.emacs.d/lisp/")
+1. Place adif.el in the load path. If one hasn't been established, you can place it in `~/.emacs.d/lisp/` and
+   then, in the init.el file (located in ~/.emacs.d/) add: `(add-to-list 'load-path "~/.emacs.d/lisp/")`
 2. Add to the init.el file: (require 'adif)
 3. Restart Emacs
 
