@@ -13,7 +13,8 @@ An Emacs major mode for reading and safely editing ADIF amateur radio log files.
 
 ## Using it
 
-Opening a log shows one line per QSO:
+Opening a log shows one line per QSO with a customizable selection of columns
+and rows that can be filtered and sorted as desired:
 
     ADIF Log: /home/dave/qsolog.adi   [1482 records]
 
@@ -30,9 +31,8 @@ Press `RET` on a record to edit it as a list of fields:
     MODE: CW
     PROP_MODE: ES              Sporadic E
 
-Fill anything in, add fields, remove them, save with `C-c C-c`. Lengths
-are worked out when the record is written, so they are never something to
-get right by hand.
+Fill anything in, add fields, remove them, save with `C-c C-c`. Field lengths 
+are automatically calculated and recorded when the record is written.
 
 ### In the log
 
@@ -148,20 +148,11 @@ Changing major mode by hand is not the way to reach the text. The summary
 buffer holds a rendered table while visiting the log, so saving it would
 write the table over the QSOs; adif-mode refuses that and points at `R`.
 
-## What it deliberately does not do
-
-STATE and CNTY are not offered as lists. ADIF defines them per DXCC
-entity, some two thousand entries across eighty tables, so a flat list
-would accept an Alabama county for a Canadian contact. Offering nothing is
-better than offering something wrong; they are free text until adif-mode
-can read the record's DXCC first. AWARD and CREDIT hold comma-separated
-lists rather than single values, and are left alone for the same reason.
-
 ## qso.el
 
 [qso.el](https://github.com/K6SM/Emacs-QSO-Logger) is a companion for
-logging QSOs as they happen, from the same author. Neither requires the
-other; adif-mode edits logs whatever wrote them.
+logging QSOs, from the same author, but entirely optional; adif-mode edits 
+logs regardless of what wrote them.
 
 ## License
 
