@@ -4,7 +4,7 @@
 ;; Author: David Pentrack
 ;; URL: https://github.com/K6SM/adif-mode
 ;; Keywords: comm, hamradio, adif, logging
-;; Version: 1.0.0
+;; Version: 1.0.1
 ;; Package-Requires: ((emacs "25.1"))
 
 ;; This program is free software; you can redistribute it and/or modify
@@ -47,9 +47,9 @@
 ;;   R         Edit the whole file as raw ADIF text
 ;;   i         Insert a new record, pre-filled from adif-new-record-fields
 ;;   n / p     Move to the next / previous record
-;;   k         Kill record(s): region, or C-u for the filtered subset
+;;   k / C-k   Kill record(s): region, or C-u for the filtered subset
 ;;   M-w       Copy record(s) without removing them
-;;   y         Yank the most recently killed or copied records
+;;   y / C-y   Yank the most recently killed or copied records
 ;;   s / S     Sort on any field, ascending / descending
 ;;   f         Filter the view on any ADIF field
 ;;   =         List duplicate QSOs
@@ -74,19 +74,19 @@
 ;;   order on disk.
 ;;
 ;; Filtering:
-;;   'F' narrows the view to records whose chosen field matches a value.
+;;   'f' narrows the view to records whose chosen field matches a value.
 ;;   Any ADIF field can be used, including ones absent from the columns
 ;;   and ones no record in the file carries.  The filter is a view: the
 ;;   log is untouched, record numbering is unchanged, and editing or
 ;;   deleting a visible record acts on the record it names.  The
 ;;   duplicate report follows the filter; sorting still orders the whole
-;;   log.  Answer
-;;   either prompt with nothing, or press C-c C-f, to clear it.
+;;   log.  Answer either prompt with nothing, or press C-c C-f, to
+;;   clear it.
 ;;   adif-filter-match chooses between substring, exact and regexp
 ;;   comparison.
 ;;
 ;; Duplicates:
-;;   'D' lists QSOs repeated on the same band in the same mode, which
+;;   '=' lists QSOs repeated on the same band in the same mode, which
 ;;   contest rules generally disallow.  The fields that define a
 ;;   duplicate are set by adif-duplicate-fields.  Duplicates are shown
 ;;   apart from the parse warnings on 'w': a length problem is a fault
@@ -128,11 +128,19 @@
 ;;
 ;; Key bindings in the record edit buffer:
 ;;   C-c C-c / C-x C-s   Save record and return to log view
-;;   C-c C-k              Discard changes and return to log view
-;;   C-c C-a              Add a field (with completion over all ADIF fields)
-;;   C-c C-w              Kill the field on the current line
-;;   TAB                  Complete a field name or a value
-;;   C-c C-v              Set the value of the field on the current line
+;;   C-c C-k             Discard changes and return to log view
+;;   C-c C-a             Add a field (with completion over all ADIF fields)
+;;   C-c C-v             Set the value of the field on the current line
+;;   TAB                 Complete a field name or a value
+;;   C-k                 Kill the field on the current line
+;;   M-w                 Copy the field on the current line
+;;   C-y / M-y           Yank a killed field back, and cycle the kill ring
+;;
+;;   C-k, M-w and C-y do here what they do in any text buffer, with the
+;;   field as the unit rather than the line, so a field killed in one
+;;   record can be yanked into the next.  With the region active they
+;;   fall back to acting on the region, which is how part of a value is
+;;   still moved about as ordinary text.
 ;;
 ;; Edit-buffer format:
 ;;   Each line is  FIELDNAME: value
@@ -1851,7 +1859,7 @@ still orders the whole log."
 
 ;;; ─── Creating a Log ───────────────────────────────────────────────────────────
 
-(defconst adif-mode-program-version "1.0.0"
+(defconst adif-mode-program-version "1.0.1"
   "Version written as PROGRAMVERSION into a log created here.")
 
 (defun adif--file-header ()
@@ -2318,22 +2326,69 @@ immediately using completion over the plain-English descriptions."
         (insert (format "%s: %s" field (or value "")))
         (adif--annotate-buffer)))))
 
-(defun adif-record-edit-kill-field ()
-  "Remove the ADIF field on the current line.
+(defun adif--field-line-bounds ()
+  "Return the bounds of the whole field line at point, newline included.
+Return nil when point is not on a line of the form FIELDNAME: value."
+  (let ((line (buffer-substring-no-properties (line-beginning-position)
+                                              (line-end-position))))
+    (when (string-match "^[A-Za-z_][A-Za-z0-9_]*:" line)
+      (cons (line-beginning-position)
+            (min (1+ (line-end-position)) (point-max))))))
 
-This buffer holds ordinary text, so `kill-line' and the rest of the
-usual editing commands work here too; this is the same thing bound
-where a mode-specific command is looked for."
+(defun adif-record-edit-kill-field ()
+  "Kill the ADIF field on the current line, saving it on the kill ring.
+
+Bound to \\[adif-record-edit-kill-field], where a record edited field
+by field wants the same key that kills a line of text.  The field goes
+on the ordinary kill ring, so \\[yank] puts it back, here or in the
+record edited next.
+
+When the region is active this kills the region instead, so a value can
+still be moved about as text."
   (interactive)
-  (let ((line (buffer-substring (line-beginning-position)
-                                (line-end-position))))
-    (if (string-match "^[A-Za-z_][A-Za-z0-9_]*:" line)
-        (progn
-          (delete-region (line-beginning-position)
-                         (min (1+ (line-end-position)) (point-max)))
-          (adif--annotate-buffer)
-          (message "Field killed."))
-      (message "Point is not on a field line."))))
+  (if (use-region-p)
+      (kill-region (region-beginning) (region-end))
+    (let ((bounds (adif--field-line-bounds)))
+      (if (null bounds)
+          (message "Point is not on a field line.")
+        (kill-region (car bounds) (cdr bounds))
+        (adif--annotate-buffer)
+        (message "Field killed; %s puts it back"
+                 (substitute-command-keys "\\[yank]"))))))
+
+(defun adif-record-edit-copy-field ()
+  "Copy the ADIF field on the current line to the kill ring.
+
+The line is left as it is.  \\[yank] then inserts the field into this
+record or another one, which is how a value is carried from one QSO to
+the next.
+
+When the region is active this copies the region instead."
+  (interactive)
+  (if (use-region-p)
+      (kill-ring-save (region-beginning) (region-end))
+    (let ((bounds (adif--field-line-bounds)))
+      (if (null bounds)
+          (message "Point is not on a field line.")
+        (copy-region-as-kill (car bounds) (cdr bounds))
+        (message "Field copied; %s inserts it"
+                 (substitute-command-keys "\\[yank]"))))))
+
+(defun adif-record-edit-yank (&optional arg)
+  "Yank the most recent kill, then refresh the value descriptions.
+
+Plain `yank' with ARG, except that a field line arriving this way gets
+its plain-English description shown beside it like any other."
+  (interactive "*P")
+  (yank arg)
+  (adif--annotate-buffer))
+
+(defun adif-record-edit-yank-pop (&optional arg)
+  "Replace the just-yanked kill with an earlier one, ARG back.
+As `yank-pop', refreshing the value descriptions afterwards."
+  (interactive "*p")
+  (yank-pop arg)
+  (adif--annotate-buffer))
 
 ;;; ─── adif-record-edit-mode ────────────────────────────────────────────────────
 
@@ -2343,8 +2398,15 @@ where a mode-specific command is looked for."
     (define-key map (kbd "C-x C-s") #'adif-record-edit-save)
     (define-key map (kbd "C-c C-k") #'adif-record-edit-discard)
     (define-key map (kbd "C-c C-a") #'adif-record-edit-add-field)
-    (define-key map (kbd "C-c C-w") #'adif-record-edit-kill-field)
     (define-key map (kbd "C-c C-v") #'adif-record-edit-set-value)
+    ;; The keys text is edited with, doing here what they do everywhere
+    ;; else: kill a line, copy it, put it back.  The unit is the field,
+    ;; and the ordinary kill ring carries it, so a field killed here can
+    ;; be yanked into the record edited next.
+    (define-key map (kbd "C-k") #'adif-record-edit-kill-field)
+    (define-key map (kbd "M-w") #'adif-record-edit-copy-field)
+    (define-key map (kbd "C-y") #'adif-record-edit-yank)
+    (define-key map (kbd "M-y") #'adif-record-edit-yank-pop)
     map)
   "Keymap for `adif-record-edit-mode'.")
 
@@ -2387,8 +2449,13 @@ values that field accepts are offered, annotated with their meanings."
      :help "Append a field, chosen from the ADIF field list"]
     ["Set Value..."        adif-record-edit-set-value
      :help "Choose this field's value from those the specification allows"]
+    "--"
     ["Kill Field"          adif-record-edit-kill-field
-     :help "Remove the field on this line"]))
+     :help "Remove the field on this line, keeping it on the kill ring"]
+    ["Copy Field"          adif-record-edit-copy-field
+     :help "Copy the field on this line to the kill ring"]
+    ["Yank Field"          adif-record-edit-yank
+     :help "Insert the most recently killed or copied text"]))
 
 (define-derived-mode adif-record-edit-mode text-mode "ADIF-Record"
   "Major mode for editing a single ADIF record in line-oriented format.
@@ -2420,8 +2487,13 @@ the ADIF file.
             1 font-lock-string-face))))
   (font-lock-mode 1)
   (setq header-line-format
-        (concat "C-c C-c: save  C-c C-k: discard  "
-                "C-c C-a: add  C-c C-d: del  C-c C-v: set value")))
+        (substitute-command-keys
+         (concat "\\<adif-record-edit-mode-map>"
+                 "\\[adif-record-edit-save]: save  "
+                 "\\[adif-record-edit-discard]: discard  "
+                 "\\[adif-record-edit-add-field]: add field  "
+                 "\\[adif-record-edit-set-value]: set value  "
+                 "\\[adif-record-edit-kill-field]: kill field"))))
 
 ;;; ─── Main Mode Commands ───────────────────────────────────────────────────────
 
@@ -3006,7 +3078,11 @@ files."
     (define-key map (kbd "i")   #'adif-new-record)
     (define-key map (kbd "n")   #'adif-next-record)
     (define-key map (kbd "p")   #'adif-previous-record)
+    ;; Kill, copy and yank, under both the single letter this sort of
+    ;; read-only listing uses and the key the same thing has when editing
+    ;; text.  The unit here is the record rather than the line.
     (define-key map (kbd "k")   #'adif-kill-records)
+    (define-key map (kbd "C-k") #'adif-kill-records)
     (define-key map (kbd "M-w") #'adif-copy-records)
     (define-key map (kbd "y")   #'adif-yank-records)
     (define-key map (kbd "C-y") #'adif-yank-records)

@@ -43,9 +43,9 @@ are automatically calculated and recorded when the record is written.
 | `R`       | Edit the whole file as raw ADIF text |
 | `n` `p`   | Next / previous record |
 | `i`       | Insert a record |
-| `k`       | Kill records: the region, or `C-u` for the filtered subset |
+| `k` `C-k` | Kill records: the region, or `C-u` for the filtered subset |
 | `M-w`     | Copy records without removing them |
-| `y`       | Yank records, including from another log |
+| `y` `C-y` | Yank records, including from another log |
 | `s` `S`   | Sort on any field, ascending or descending |
 | `f`       | Filter on a field; filters accumulate |
 | `C-c C-f` | Clear all filters |
@@ -65,9 +65,17 @@ Everything above is also on the **ADIF** menu.
 | `C-c C-c` `C-x C-s` | Save and return |
 | `C-c C-k`           | Discard and return |
 | `C-c C-a`           | Add a field |
-| `C-c C-w`           | Kill the field on this line |
 | `C-c C-v`           | Set this field's value by selection |
 | `TAB`               | Complete a field name or a value |
+| `C-k`               | Kill the field on this line |
+| `M-w`               | Copy the field on this line |
+| `C-y` `M-y`         | Yank a killed field back, and cycle the kill ring |
+
+`C-k`, `M-w` and `C-y` do here what they do in any text buffer, with the
+field as the unit rather than the line, so a field killed in one record
+can be yanked into the next. With the region active they act on the
+region instead, which is how part of a value is still moved about as
+ordinary text.
 
 ## What it does
 
