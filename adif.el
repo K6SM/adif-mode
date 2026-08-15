@@ -47,14 +47,14 @@
 ;;   R         Edit the whole file as raw ADIF text
 ;;   i         Insert a new record, pre-filled from adif-new-record-fields
 ;;   n / p     Move to the next / previous record
-;;   k / C-k   Kill record(s): region, or C-u for the filtered subset
+;;   C-k       Kill record(s): region, or C-u for the filtered subset
 ;;   M-w       Copy record(s) without removing them
-;;   y / C-y   Yank the most recently killed or copied records
+;;   C-y       Yank the most recently killed or copied records
 ;;   s / S     Sort on any field, ascending / descending
 ;;   f         Filter the view on any ADIF field
 ;;   =         List duplicate QSOs
 ;;   g         Revert from disk
-;;   C-x C-s   Write the log (makes a sort order permanent)
+;;   C-x C-s   Write the log (C-u first to write it as displayed)
 ;;   w         Show length problems found when the file was parsed
 ;;   ?         Describe the mode
 ;;   q         Quit
@@ -63,6 +63,21 @@
 
 ;;
 ;; Sorting:
+;;   A log opens most recent first, which is what adif-default-sort asks
+;;   for; set that to nil to open in the order the file holds.
+;;
+;;   The order and any filters in effect are kept when the file is
+;;   re-read, including when another program appends a QSO and the
+;;   summary refreshes by itself.  A new QSO takes its place in the
+;;   order rather than dropping the view back to the order on disk, so
+;;   there is nothing to set up again after every contact.
+;;
+;;   Sorting arranges the display only.  The records are held in the
+;;   order the file gives them and are written back in that order, so
+;;   the file is not reordered by looking at it a different way.  C-u
+;;   C-x C-s writes the log in the displayed order, making a sort
+;;   permanent.
+;;
 ;;   's' and 'S' order the log on a field chosen the way a filter field
 ;;   is chosen; the default offered is the field last sorted on.
 ;;   QSO_DATE and TIME_ON sort on date and time together.  ADIF allows
@@ -142,6 +157,19 @@
 ;;   fall back to acting on the region, which is how part of a value is
 ;;   still moved about as ordinary text.
 ;;
+;; Layout:
+;;   Summary columns are made as wide as the longest value on display,
+;;   never narrower than the heading and never wider than the width set
+;;   in adif-summary-columns, and narrow again when a filter reduces
+;;   what is shown.  adif-summary-auto-width turns this off in favour of
+;;   the configured widths.
+;;
+;;   In an edit buffer the field names are padded so that every value
+;;   starts at the same column, and the descriptions beside coded values
+;;   start at the same column as each other.  The padding is spaces,
+;;   which are trimmed when the record is read back, so the record is
+;;   not altered by being tidied.  adif-align-edit-buffer turns it off.
+;;
 ;; Edit-buffer format:
 ;;   Each line is  FIELDNAME: value
 ;;   Lines that do not match that pattern (blank lines, lines beginning
@@ -208,6 +236,42 @@ means a single FILE~ holding the state before the last write.  Setting
 
 Nothing is written if the backup cannot be made without asking first."
   :tag "ADIF Backup"
+  :type 'boolean
+  :group 'adif)
+
+(defcustom adif-default-sort '("QSO_DATE" . descending)
+  "How a log is ordered when it is opened.
+
+The default puts the most recent QSO at the top, which is the one a
+station just worked and the one most often wanted.  QSO_DATE sorts on
+date and time together; see `adif-sort-by-field' for how other fields
+are compared.
+
+Set this to nil to leave the log in the order the file holds it.
+
+The order chosen here is a view, in the same way a sort asked for by
+hand is: it is applied again whenever the file is re-read, including
+when another program appends a QSO.  It reaches the file only when the
+log is next written, since \\[adif-save] and every record edit write
+`adif--records' in the order they are held."
+  :tag "ADIF Default Sort"
+  :type '(choice (const :tag "The order the file holds" nil)
+                 (cons :tag "Sort on a field"
+                       (string :tag "ADIF field")
+                       (choice :tag "Order"
+                               (const :tag "Newest or largest first" descending)
+                               (const :tag "Oldest or smallest first" ascending))))
+  :group 'adif)
+
+(defcustom adif-confirm-kill t
+  "Whether \\[adif-kill-records] asks before removing records from the log.
+
+A QSO deleted from a log cannot be worked again, and the summary gives
+no undo, so the question is asked however few records are involved.
+The records go on `adif-record-kill-ring' either way and
+\\[adif-yank-records] puts them back, and the previous contents of the
+file are kept when `adif-backup' is on."
+  :tag "ADIF Confirm Kill"
   :type 'boolean
   :group 'adif)
 
@@ -348,8 +412,10 @@ Each entry is a list of three items:
 
   FIELD    the ADIF field to show, chosen from the list of known
            fields or typed in for anything not listed;
-  WIDTH    the column width in characters, values being truncated
-           to fit;
+  WIDTH    the maximum column width in characters, values longer
+           than it being truncated to fit.  With
+           `adif-summary-auto-width' off it is the exact width
+           instead;
   HEADING  the column heading.  Leave it empty to use the field's
            own name.
 
@@ -360,6 +426,38 @@ to carry which fields."
   :type `(repeat (list ,(adif--field-choice-type)
                        (integer :tag "Width")
                        (string  :tag "Heading (empty = field name)")))
+  :group 'adif)
+
+(defcustom adif-align-edit-buffer t
+  "Whether a record being edited has its values lined up in a column.
+
+With this on, the field names in an edit buffer are padded so that
+every value starts at the same column, and the plain-English
+descriptions shown beside coded values start at the same column as
+each other.  The padding is ordinary spaces, which are trimmed when
+the record is read back, so nothing about the record changes.
+
+With it off, each line reads FIELDNAME: value with a single space,
+whatever the length of the field name."
+  :tag "ADIF Align Edit Buffer"
+  :type 'boolean
+  :group 'adif)
+
+(defcustom adif-summary-auto-width t
+  "Whether summary columns are sized to the data on display.
+
+With this on, each column is made as wide as the longest value it
+shows, so a log of four character callsigns does not carry a twelve
+character CALL column, and columns narrow again when a filter reduces
+what is on display.  A column is never narrower than its heading, and
+never wider than the width given for it in `adif-summary-columns',
+which stops one long COMMENT from pushing every other column off the
+screen.
+
+With it off, the widths in `adif-summary-columns' are used as given,
+which keeps the columns in the same place whatever the log holds."
+  :tag "ADIF Summary Auto Width"
+  :type 'boolean
   :group 'adif)
 
 (defcustom adif-warn-on-duplicate t
@@ -1283,6 +1381,15 @@ Displayed by \\[adif-show-warnings].")
 (defvar-local adif--edit-record-index nil
   "Index into the parent buffer's `adif--records' being edited.")
 
+(defvar-local adif--edit-record-original nil
+  "The record this edit buffer was opened from, as it stood then.
+
+Held so the record can be found again by what it is rather than by
+where it was.  A position is not a name: the log may be sorted, or
+re-read after another program appends a QSO, while the record sits
+here being edited, and writing back to a remembered position would
+then overwrite a different QSO.  See `adif--edit-target-index'.")
+
 (defvar-local adif--edit-is-new nil
   "Non-nil when this edit buffer was opened for a newly created record.
 Used by `adif-record-edit-discard' to clean up the placeholder entry.")
@@ -1484,6 +1591,24 @@ so ordinary string comparison orders records chronologically."
 (defvar-local adif--sort-field "QSO_DATE"
   "Field most recently sorted on, offered as the default next time.")
 
+(defvar-local adif--sort-descending nil
+  "Whether the order in effect is descending.
+Held with `adif--sort-field' so that the order survives the file being
+re-read.  See `adif--compute-view'.")
+
+(defvar-local adif--view nil
+  "Positions in `adif--records' in the order they are displayed, or nil.
+
+The display order is separate from the order the records are held in:
+sorting arranges this list, leaving `adif--records' as the file gave
+it, so the file is never rewritten in a different order than it had.
+Nil means it must be worked out again; see `adif--view'.")
+
+(defvar-local adif--sort-active nil
+  "Non-nil once an order has been chosen, by hand or by `adif-default-sort'.
+Nil means the log is held in the order the file gave it, and re-reading
+the file leaves it that way.")
+
 (defun adif--column-numeric-p (field)
   "Return non-nil when every value FIELD carries in this log is a number.
 
@@ -1523,6 +1648,70 @@ Anything else is compared as text, ignoring case."
     (cons (lambda (rec) (upcase (or (cdr (assoc field rec)) "")))
           #'string<))))
 
+(defun adif--compute-view ()
+  "Return the positions in `adif--records' in the order to display them.
+
+Sorting arranges this list and never `adif--records' itself, so the
+log is held in the order the file gives it however it is displayed.
+With no order in effect the list is simply each position in turn.
+
+Each record's sort key is built once and the keyed pairs sorted.
+Deriving the key inside the predicate instead would rebuild it on
+every comparison, some twenty-eight times per record on a log of
+twenty thousand."
+  (let ((n (length adif--records)))
+    (if (not adif--sort-active)
+        (number-sequence 0 (1- n))
+      (let* ((spec   (adif--sort-keys adif--sort-field))
+             (keyfn  (car spec))
+             (lessfn (cdr spec))
+             (desc   adif--sort-descending)
+             (i      -1))
+        (mapcar #'cdr
+                (sort (mapcar (lambda (rec)
+                                (setq i (1+ i))
+                                (cons (funcall keyfn rec) i))
+                              adif--records)
+                      (lambda (a b)
+                        (if desc
+                            (funcall lessfn (car b) (car a))
+                          (funcall lessfn (car a) (car b))))))))))
+
+(defun adif--invalidate-view ()
+  "Note that the display order must be worked out again.
+Called wherever `adif--records' changes or the order in effect does."
+  (setq adif--view nil))
+
+(defun adif--view ()
+  "Return the display order, working it out if it is not current.
+
+The order is kept between renders rather than recomputed each time,
+since sorting twenty thousand records is not something to repeat on
+every refresh of a log being appended to.  The length is checked as
+well as the presence, so a list left behind by a record arriving or
+leaving is not used."
+  (unless (and adif--view (= (length adif--view) (length adif--records)))
+    (setq adif--view (adif--compute-view)))
+  adif--view)
+
+(defun adif--records-in-view-order ()
+  "Return `adif--records' as displayed: sorted, unfiltered.
+
+Indexing through a vector rather than with `nth', which would walk the
+list from the front for every record and turn a display of a large log
+into quadratic work."
+  (let ((vec (vconcat adif--records)))
+    (mapcar (lambda (i) (aref vec i)) (adif--view))))
+
+(defun adif--init-sort ()
+  "Adopt `adif-default-sort' as this buffer's order, if it names one."
+  (when (consp adif-default-sort)
+    (let ((field (car adif-default-sort)))
+      (when (and (stringp field) (not (string-empty-p field)))
+        (setq adif--sort-field      (upcase (string-trim field)))
+        (setq adif--sort-descending (eq (cdr adif-default-sort) 'descending))
+        (setq adif--sort-active     t)))))
+
 (defun adif-sort-by-field (field &optional descending)
   "Sort the log on FIELD, ascending unless DESCENDING.
 
@@ -1535,30 +1724,25 @@ numbers sorts numerically; anything else sorts as text, ignoring case.
 Records with no value for the field gather at the ascending end, and
 records that compare equal keep their existing order.
 
-Only the order held in memory changes; the file is rewritten the next
-time a record is saved, killed or yanked, and \\[adif-save] writes it
-at once.  \\[adif-revert] restores the order on disk."
+The order stays in effect: re-reading the file applies it again, so a
+QSO appended by another program takes its place in the order.
+
+Sorting changes the display only.  The records are held in the order
+the file gives them, and writing the log preserves that order.  Use
+\\[universal-argument] \\[adif-save] to write the log in the displayed
+order."
   (interactive
    (list (upcase (string-trim
                   (completing-read (format "Sort on field (default %s): " adif--sort-field)
                                    adif-field-names nil nil nil nil adif--sort-field)))
          current-prefix-arg))
   (when (string-empty-p field) (setq field adif--sort-field))
-  (setq adif--sort-field field)
-  (let* ((spec (adif--sort-keys field))
-         (keyfn (car spec))
-         (lessfn (cdr spec)))
-    (setq adif--records
-          (mapcar #'cdr
-                  (sort (mapcar (lambda (rec) (cons (funcall keyfn rec) rec))
-                                adif--records)
-                        (lambda (a b)
-                          (if descending
-                              (funcall lessfn (car b) (car a))
-                            (funcall lessfn (car a) (car b))))))))
+  (setq adif--sort-field      field)
+  (setq adif--sort-descending (and descending t))
+  (setq adif--sort-active     t)
+  (adif--invalidate-view)
   (adif--render-summary)
-  (message "Sorted on %s, %s.  The file is unchanged until it is written."
-           field (if descending "descending" "ascending")))
+  (message "Sorted on %s, %s." field (if descending "descending" "ascending")))
 
 (defun adif-sort-by-field-reverse (field)
   "Sort the log on FIELD, descending.  See `adif-sort-by-field'."
@@ -1579,25 +1763,16 @@ times recorded to the minute and to the second sort together
 correctly.  Records with no date sort to the oldest end.  Records
 sharing a date and time keep their existing relative order.
 
-Only the order held in memory changes; the file itself is rewritten
-the next time a record is saved or deleted.  Use \\[adif-revert] to
-restore the order stored on disk."
+Like any other sort this one stays in effect, and is applied again
+when the file is re-read.  It changes the display only; the log is
+written in the order the file gives it."
   (interactive "P")
-  ;; Build each record's key once and sort the keyed pairs.  Deriving the
-  ;; key inside the predicate instead would rebuild it on every
-  ;; comparison, some twenty-eight times per record on a log of twenty
-  ;; thousand.
-  (setq adif--records
-        (mapcar #'cdr
-                (sort (mapcar (lambda (rec) (cons (adif--datetime-key rec) rec))
-                              adif--records)
-                      (lambda (a b)
-                        (if descending
-                            (string> (car a) (car b))
-                          (string< (car a) (car b)))))))
+  (setq adif--sort-field      "QSO_DATE")
+  (setq adif--sort-descending (and descending t))
+  (setq adif--sort-active     t)
+  (adif--invalidate-view)
   (adif--render-summary)
-  (message "Sorted %s.  The file is unchanged until a record is saved or deleted."
-           (if descending "newest first" "oldest first")))
+  (message "Sorted %s." (if descending "newest first" "oldest first")))
 
 (defun adif-sort-by-datetime-reverse ()
   "Sort the log by QSO_DATE and TIME_ON, newest first.
@@ -1859,7 +2034,7 @@ still orders the whole log."
 
 ;;; ─── Creating a Log ───────────────────────────────────────────────────────────
 
-(defconst adif-mode-program-version "1.0.1"
+(defconst adif-mode-program-version "1.0.0"
   "Version written as PROGRAMVERSION into a log created here.")
 
 (defun adif--file-header ()
@@ -1954,6 +2129,25 @@ than more; the prefix argument still selects the filtered subset."
   "Return N followed by \"record\" or \"records\"."
   (format "%d record%s" n (if (= n 1) "" "s")))
 
+(defun adif--describe-kill (idxs)
+  "Describe the records at IDXS for the question asked before killing them.
+
+A single record is named by its callsign, band and date where it has
+them, so that the question is about a recognisable QSO rather than
+about a number.  Several are given as a count, the records themselves
+being on screen."
+  (if (cdr idxs)
+      (adif--describe-count (length idxs))
+    (let* ((rec  (nth (car idxs) adif--records))
+           (call (cdr (assoc "CALL" rec)))
+           (band (cdr (assoc "BAND" rec)))
+           (date (cdr (assoc "QSO_DATE" rec)))
+           (bits (delq nil (list call band date))))
+      (if bits
+          (format "record %d, %s" (1+ (car idxs))
+                  (mapconcat #'identity bits " "))
+        (format "record %d" (1+ (car idxs)))))))
+
 (defun adif-copy-records (&optional all-visible)
   "Copy records to `adif-record-kill-ring' without altering the log.
 
@@ -1974,14 +2168,20 @@ Acts on the region when one is active, on the record at point
 otherwise, and with a prefix argument ALL-VISIBLE on every record the
 filter currently admits.
 
+Confirmation is asked for first, however few records are involved,
+since a QSO deleted from a log cannot be worked again and the summary
+offers no undo; `adif-confirm-kill' turns the question off.
+
 The file is rewritten at once, as it is for any other change, but the
 records are kept for \\[adif-yank-records], so a kill can be undone by
 yanking them back."
   (interactive "P")
   (let ((idxs (adif--selected-record-indices all-visible)))
     (unless idxs (user-error "No record here to kill"))
-    (when (and (cdr idxs)
-               (not (yes-or-no-p (format "Kill %s? " (adif--describe-count (length idxs))))))
+    (when (and adif-confirm-kill
+               (not (yes-or-no-p
+                     (format "Kill %s from the log? "
+                             (adif--describe-kill idxs)))))
       (user-error "Cancelled"))
     (adif--push-kill (mapcar (lambda (i) (nth i adif--records)) idxs))
     ;; Remove from the end backwards so that the earlier positions stay
@@ -2024,6 +2224,33 @@ is how records from one log are added to another."
           ((> len width) (substring str 0 width))
           (t (concat str (make-string (- width len) ?\s))))))
 
+(defun adif--fit-column-widths (cols rows)
+  "Set each column in COLS to the width the data in ROWS needs.
+
+COLS is a list of (FIELD WIDTH HEADING), altered in place.  ROWS is
+the records on display, each as (INDEX . RECORD).  A column ends up as
+wide as the longest value it shows, but never narrower than its
+heading nor wider than the width it was given, which is what stops a
+single long value from taking over the line.
+
+The records are walked once with the columns inside, rather than once
+per column, so a log of twenty thousand is read through a single
+time."
+  (let ((maxima (make-vector (length cols) 0)))
+    (dolist (row rows)
+      (let ((rec (cdr row))
+            (i   0))
+        (dolist (c cols)
+          (let ((v (cdr (assoc (nth 0 c) rec))))
+            (when (and v (> (length v) (aref maxima i)))
+              (aset maxima i (length v))))
+          (setq i (1+ i)))))
+    (let ((i 0))
+      (dolist (c cols)
+        (setcar (cdr c) (max (length (nth 2 c))
+                             (min (nth 1 c) (aref maxima i))))
+        (setq i (1+ i))))))
+
 (defun adif--render-summary ()
   "Render the ADIF summary table into the current buffer.
 
@@ -2051,7 +2278,19 @@ data already held in `adif--records'."
                                      heading
                                    field))))
                        adif-summary-columns))
+         ;; The records on display, gathered before anything is formatted
+         ;; because the column widths depend on what they hold.  Doing it
+         ;; here also means the filter is applied once rather than twice.
+         (rows (let ((vec (vconcat adif--records))
+                     (out '()))
+                 (dolist (idx (adif--view))
+                   (let ((rec (aref vec idx)))
+                     (when (adif--record-matches-filter-p rec)
+                       (push (cons idx rec) out))))
+                 (nreverse out)))
          (chunks '()))
+    (when adif-summary-auto-width
+      (adif--fit-column-widths cols rows))
     ;; File / record-count header
     (push (propertize
            (if adif--filter
@@ -2077,11 +2316,14 @@ data already held in `adif--records'."
            cols "")
           chunks)
     (push "\n" chunks)
-    ;; One row per record, each carrying its index as a text property
-    (let ((idx 0))
-      (dolist (rec adif--records)
-        (when (adif--record-matches-filter-p rec)
-          (push (propertize
+    ;; One row per record, in the display order, each carrying the
+    ;; position of its record in `adif--records' as a text property.
+    ;; Every command works from that property, so it does not matter to
+    ;; them how the rows have been arranged.
+    (dolist (row rows)
+      (let ((idx (car row))
+            (rec (cdr row)))
+        (push (propertize
                (concat (mapconcat
                         (lambda (c)
                           (concat (adif--truncate-pad
@@ -2090,9 +2332,8 @@ data already held in `adif--records'."
                                   "  "))
                         cols "")
                        "\n")
-                 'adif-record-index idx)
-                chunks))
-        (setq idx (1+ idx))))
+               'adif-record-index idx)
+              chunks)))
     (erase-buffer)
     (insert (mapconcat #'identity (nreverse chunks) ""))
     (set-buffer-modified-p nil)
@@ -2159,31 +2400,74 @@ another frame if that is where it lives."
             (select-frame-set-input-focus frame)))
         (select-window win)))))
 
+(defun adif--edit-target-index (original idx is-new)
+  "Return where the record being edited now sits in `adif--records'.
+
+Call this in the log buffer.  ORIGINAL is the record as it stood when
+the edit began, IDX where it sat then, and IS-NEW whether it is a
+record not yet in the log.
+
+The position is looked up afresh rather than trusted, because the log
+may have been sorted or re-read while the record was being edited.
+ORIGINAL is looked for by identity first and by content second, the
+latter being what is left after the file has been re-read and every
+record rebuilt as a new object.  Returns nil when the record cannot be
+found, which the caller must treat as a refusal to write rather than
+as position zero."
+  (cond
+   (is-new
+    ;; A new record is the empty placeholder appended for it.  If the log
+    ;; was re-read underneath, the placeholder is gone; nil then means
+    ;; append rather than overwrite whatever holds that position now.
+    (and idx (< idx (length adif--records)) (null (nth idx adif--records)) idx))
+   ((null original) nil)
+   ((seq-position adif--records original #'eq))
+   ((seq-position adif--records original #'equal))
+   (t nil)))
+
 (defun adif-record-edit-save ()
   "Save the current record back to the ADIF log and return to the log view.
-The file is rewritten immediately with correct field lengths."
+The file is rewritten immediately with correct field lengths.
+
+The record is written to wherever it now sits, which need not be where
+it sat when the edit began: the log may have been sorted, or re-read
+after another program appended a QSO.  A record that has gone from the
+log altogether is not written over the top of another one."
   (interactive)
   (let* ((new-alist (adif--edit-string-to-alist (buffer-string)))
          (parent    adif--edit-parent-buffer)
+         (original  adif--edit-record-original)
          (idx       adif--edit-record-index)
-         (is-new    adif--edit-is-new))
+         (is-new    adif--edit-is-new)
+         (target    nil))
     (unless (buffer-live-p parent)
       (error "Parent ADIF buffer no longer exists"))
-    ;; Ask about duplicates while the edit buffer is still here, so that
-    ;; declining leaves the record on screen to be corrected rather than
-    ;; discarding what was typed.
+    ;; Resolve the position and ask about duplicates while the edit buffer
+    ;; is still here, so that a refusal leaves the record on screen to be
+    ;; corrected rather than discarding what was typed.
     (with-current-buffer parent
-      (let ((was (and (not is-new) (nth idx adif--records))))
+      (setq target (adif--edit-target-index original idx is-new))
+      (when (and (not is-new) (null target))
+        (user-error
+         (concat "This record is no longer in the log -- it may have been "
+                 "killed, or the file re-read; the text is still here, and "
+                 "C-c C-a ... C-c C-c on a new record will add it back")))
+      (let ((was (and (not is-new) target (nth target adif--records))))
         (when (or is-new
                   (not (equal (adif--duplicate-key was)
                               (adif--duplicate-key new-alist))))
-          (unless (adif--confirm-duplicate new-alist idx)
+          (unless (adif--confirm-duplicate new-alist target)
             (user-error "Not saved; the record is still open for editing")))))
     (adif--finish-edit parent)
-    (setcar (nthcdr idx adif--records) new-alist)
+    (if target
+        (setcar (nthcdr target adif--records) new-alist)
+      ;; A new record whose placeholder is gone, the file having been
+      ;; re-read while it was being typed.  Appending keeps it.
+      (setq adif--records (append adif--records (list new-alist))))
+    (setq target (or (seq-position adif--records new-alist #'eq) 0))
     (adif--commit)
     (adif--render-summary)
-    (message "Record %d saved to %s." (1+ idx) adif--source-file)))
+    (message "Record %d saved to %s." (1+ target) adif--source-file)))
 
 (defun adif-record-edit-discard ()
   "Discard edits to the current record and return to the log view.
@@ -2195,7 +2479,15 @@ If the record was newly created (via `adif-new-record') it is removed."
     (adif--finish-edit parent)
     (when (and parent is-new)
       (with-current-buffer parent
-        (setq adif--records (seq-take adif--records idx))
+        ;; Remove the placeholder alone.  Truncating the list at the
+        ;; remembered position instead would take every record that had
+        ;; arrived after it, which is what a refresh from another
+        ;; program's append leaves sitting there.
+        (let ((at (adif--edit-target-index nil idx t)))
+          (when at
+            (setq adif--records (append (seq-take adif--records at)
+                                        (seq-drop adif--records (1+ at))))
+            (adif--invalidate-view)))
         (adif--render-summary)))
     (message "Edit discarded.")))
 
@@ -2262,28 +2554,104 @@ if they were valid here."
   "Remove every plain-English description overlay from the current buffer."
   (remove-overlays (point-min) (point-max) 'adif-annotation t))
 
+(defun adif--align-edit-buffer ()
+  "Pad the field names in this edit buffer so the values line up.
+
+Every value is put at the same column, one space past the longest
+field name.  The padding is spaces between the colon and the value,
+which `adif--edit-string-to-alist' trims, so the record itself is not
+altered by being tidied.
+
+Point is kept where it was in the text rather than at the same buffer
+position, which the padding moves."
+  (when adif-align-edit-buffer
+    (let ((namew 0))
+      ;; How wide the widest FIELDNAME: is.
+      (save-excursion
+        (goto-char (point-min))
+        (while (not (eobp))
+          (when (looking-at adif--field-line-regexp)
+            (setq namew (max namew (1+ (length (match-string 1))))))
+          (forward-line 1)))
+      (when (> namew 0)
+        (let ((line   (line-number-at-pos))
+              ;; Where point sits within the value, so it can be put back
+              ;; there once the line in front of it has changed length.
+              (offset (save-excursion
+                        (let ((pos (point)))
+                          (beginning-of-line)
+                          (when (looking-at adif--field-line-regexp)
+                            (max 0 (- pos (match-beginning 2))))))))
+          (save-excursion
+            (goto-char (point-min))
+            (while (not (eobp))
+              (when (looking-at adif--field-line-regexp)
+                (let* ((name  (match-string 1))
+                       (value (match-string 2))
+                       (want  (concat (adif--truncate-pad
+                                       (concat name ":") namew)
+                                      " " value)))
+                  ;; Only touch lines that are not already as they should
+                  ;; be, so that an aligned buffer is left untouched and
+                  ;; is not marked modified for nothing.
+                  (unless (string= want (buffer-substring-no-properties
+                                         (line-beginning-position)
+                                         (line-end-position)))
+                    (delete-region (line-beginning-position)
+                                   (line-end-position))
+                    (insert want))))
+              (forward-line 1)))
+          (goto-char (point-min))
+          (forward-line (1- line))
+          (when (and offset (looking-at adif--field-line-regexp))
+            (goto-char (min (+ (match-beginning 2) offset)
+                            (line-end-position)))))))))
+
 (defun adif--annotate-buffer ()
   "Show plain-English descriptions beside coded values in the edit buffer.
+
 Descriptions are drawn with overlays rather than inserted as text, so
 they are never part of the buffer contents and can never be written
-into the ADIF file."
+into the ADIF file.
+
+They are placed at a column two past the longest line that carries
+one, so that the descriptions line up with each other however long
+the values in front of them are."
   (adif--clear-annotations)
-  (save-excursion
-    (goto-char (point-min))
-    (while (not (eobp))
-      (when (looking-at adif--field-line-regexp)
-        (let* ((field  (upcase (match-string 1)))
-               (value  (string-trim (match-string 2)))
-               (values (unless (string-empty-p value)
-                         (adif--field-values field)))
-               (desc   (cdr (assoc value values))))
-          (when (and desc (not (string= desc value)))
-            (let ((ov (make-overlay (line-end-position) (line-end-position))))
-              (overlay-put ov 'adif-annotation t)
-              (overlay-put ov 'after-string
-                           (propertize (concat "    " desc)
-                                       'face 'font-lock-comment-face))))))
-      (forward-line 1))))
+  (let ((found '()))
+    ;; Collect what is to be described first: where each description
+    ;; goes depends on the longest of the lines carrying one.
+    (save-excursion
+      (goto-char (point-min))
+      (while (not (eobp))
+        (when (looking-at adif--field-line-regexp)
+          (let* ((field  (upcase (match-string 1)))
+                 (value  (string-trim (match-string 2)))
+                 (values (unless (string-empty-p value)
+                           (adif--field-values field)))
+                 (desc   (cdr (assoc value values))))
+            (when (and desc (not (string= desc value)))
+              (push (list (line-end-position)
+                          (- (line-end-position) (line-beginning-position))
+                          desc)
+                    found))))
+        (forward-line 1)))
+    (when found
+      (let ((col (+ 2 (apply #'max (mapcar #'cadr found)))))
+        (dolist (item found)
+          (let ((ov (make-overlay (nth 0 item) (nth 0 item))))
+            (overlay-put ov 'adif-annotation t)
+            (overlay-put ov 'after-string
+                         (propertize (concat (make-string (- col (nth 1 item)) ?\s)
+                                             (nth 2 item))
+                                     'face 'font-lock-comment-face))))))))
+
+(defun adif--refresh-edit-buffer ()
+  "Line up the record being edited and show the value descriptions.
+The alignment comes first: where a description goes depends on how
+long the line in front of it has ended up."
+  (adif--align-edit-buffer)
+  (adif--annotate-buffer))
 
 (defun adif-record-edit-set-value ()
   "Set the value of the ADIF field on the current line.
@@ -2304,7 +2672,7 @@ read as free text pre-filled with its current value."
             (insert (format "%s: %s" field new))
             (setq done t)))))
     (if done
-        (adif--annotate-buffer)
+        (adif--refresh-edit-buffer)
       (message "Point is not on a field line."))))
 
 (defun adif-record-edit-add-field ()
@@ -2324,7 +2692,7 @@ immediately using completion over the plain-English descriptions."
         (goto-char (point-max))
         (unless (bolp) (insert "\n"))
         (insert (format "%s: %s" field (or value "")))
-        (adif--annotate-buffer)))))
+        (adif--refresh-edit-buffer)))))
 
 (defun adif--field-line-bounds ()
   "Return the bounds of the whole field line at point, newline included.
@@ -2352,7 +2720,7 @@ still be moved about as text."
       (if (null bounds)
           (message "Point is not on a field line.")
         (kill-region (car bounds) (cdr bounds))
-        (adif--annotate-buffer)
+        (adif--refresh-edit-buffer)
         (message "Field killed; %s puts it back"
                  (substitute-command-keys "\\[yank]"))))))
 
@@ -2381,14 +2749,14 @@ Plain `yank' with ARG, except that a field line arriving this way gets
 its plain-English description shown beside it like any other."
   (interactive "*P")
   (yank arg)
-  (adif--annotate-buffer))
+  (adif--refresh-edit-buffer))
 
 (defun adif-record-edit-yank-pop (&optional arg)
   "Replace the just-yanked kill with an earlier one, ARG back.
 As `yank-pop', refreshing the value descriptions afterwards."
   (interactive "*p")
   (yank-pop arg)
-  (adif--annotate-buffer))
+  (adif--refresh-edit-buffer))
 
 ;;; ─── adif-record-edit-mode ────────────────────────────────────────────────────
 
@@ -2512,12 +2880,15 @@ the ADIF file.
         (adif-record-edit-mode)
         (let ((inhibit-read-only t))
           (erase-buffer)
-          (insert (adif--record-to-edit-string rec)))
+          (insert (adif--record-to-edit-string rec))
+          ;; Line the values up before the buffer is called unmodified,
+          ;; or opening a record would leave it looking edited.
+          (adif--refresh-edit-buffer))
         (set-buffer-modified-p nil)
-        (setq adif--edit-parent-buffer parent)
-        (setq adif--edit-record-index  idx)
-        (setq adif--edit-is-new        nil)
-        (adif--annotate-buffer)
+        (setq adif--edit-parent-buffer   parent)
+        (setq adif--edit-record-index    idx)
+        (setq adif--edit-record-original rec)
+        (setq adif--edit-is-new          nil)
         (goto-char (point-min))))))
 
 (defvar-local adif--raw-parent-buffer nil
@@ -2533,6 +2904,12 @@ the ADIF file.
   "Position of the single record this raw buffer holds, or nil for the file.
 Saving replaces just that record when set, and rewrites the whole file
 when not.")
+
+(defvar-local adif--raw-record-original nil
+  "The record this raw buffer was opened from, as it stood then.
+Used the same way as `adif--edit-record-original': the record is found
+again by what it is, so that a sort or a refresh while it is being
+edited cannot make the save land on a different QSO.")
 
 (defvar adif-raw-mode-map
   (let ((map (make-sparse-keymap)))
@@ -2642,15 +3019,16 @@ written with a tag that no longer matches its value."
   "Replace this buffer's record with what has been typed here.
 The log is then written by the summary buffer, so that the check
 against the file changing underneath applies to this route too."
-  (let ((recs   (adif--parse-records-from-string (buffer-string)))
-        (idx    adif--raw-record-index)
-        (parent adif--raw-parent-buffer)
-        (file   adif--raw-source-file))
+  (let ((recs     (adif--parse-records-from-string (buffer-string)))
+        (idx      adif--raw-record-index)
+        (original adif--raw-record-original)
+        (parent   adif--raw-parent-buffer)
+        (file     adif--raw-source-file))
     (unless (buffer-live-p parent)
       (user-error "The ADIF log buffer this record belongs to is gone"))
     (unless recs
       (user-error
-       "No complete field here; nothing written (kill the record with k in the log view)"))
+       "No complete field here; nothing written (kill the record with C-k in the log view)"))
     ;; Only this record is checked.  The rest of the log is not re-read
     ;; on the strength of an edit to one record, and a tag here that no
     ;; longer matches its value is refused rather than quietly rewritten,
@@ -2662,17 +3040,25 @@ against the file changing underneath applies to this route too."
                     (adif--raw-describe-problems problems)
                     (if (cdr problems) "s" ""))))
     (with-current-buffer parent
-      (let ((was (nth idx adif--records)))
-        (dolist (r recs)
-          (when (not (equal (adif--duplicate-key was) (adif--duplicate-key r)))
-            (unless (adif--confirm-duplicate r idx)
-              (user-error "Not written; the text is still here to correct")))))
-      (setq adif--records
-            (append (seq-take adif--records idx)
-                    recs
-                    (seq-drop adif--records (1+ idx))))
-      (adif--commit)
-      (adif--render-summary))
+      ;; Where the record sits now, not where it sat when this buffer was
+      ;; opened; the log may have been sorted or re-read since.
+      (let ((at (adif--edit-target-index original idx nil)))
+        (unless at
+          (user-error
+           (concat "This record is no longer in the log -- it may have been "
+                   "killed, or the file re-read; the text is still here")))
+        (setq idx at)
+        (let ((was (nth idx adif--records)))
+          (dolist (r recs)
+            (when (not (equal (adif--duplicate-key was) (adif--duplicate-key r)))
+              (unless (adif--confirm-duplicate r idx)
+                (user-error "Not written; the text is still here to correct")))))
+        (setq adif--records
+              (append (seq-take adif--records idx)
+                      recs
+                      (seq-drop adif--records (1+ idx))))
+        (adif--commit)
+        (adif--render-summary)))
     (setq adif--raw-modtime (adif--raw-file-modtime file))
     (set-buffer-modified-p nil)
     (if (= 1 (length recs))
@@ -2692,6 +3078,20 @@ against the file changing underneath applies to this route too."
                        (length problems) (if (cdr problems) "s" "")
                        (adif--raw-describe-problems (seq-take problems 3))))
         (user-error "Save cancelled"))))
+  ;; Hand editing the whole file can drop records without it being
+  ;; obvious, a stray C-k in the wrong buffer being enough.  Losing QSOs
+  ;; is not something to discover later, so the count is checked.
+  (when adif-confirm-kill
+    (let* ((now  (length (adif--parse-records-from-string (buffer-string))))
+           (was  (and (buffer-live-p adif--raw-parent-buffer)
+                      (with-current-buffer adif--raw-parent-buffer
+                        (length adif--records))))
+           (lost (and was (- was now))))
+      (when (and lost (> lost 0))
+        (unless (yes-or-no-p
+                 (format "This removes %s from the log (%d, was %d).  Write anyway? "
+                         (adif--describe-count lost) now was))
+          (user-error "Save cancelled")))))
   (adif--make-backup adif--raw-source-file)
   (write-region (point-min) (point-max) adif--raw-source-file)
   (setq adif--raw-modtime (adif--raw-file-modtime adif--raw-source-file))
@@ -2763,10 +3163,11 @@ log view reports any that no longer agree once the record is written."
             (erase-buffer)
             (insert (adif--alist-to-adif rec)))
           (adif-raw-mode)
-          (setq adif--raw-source-file   file
-                adif--raw-parent-buffer parent
-                adif--raw-record-index  idx
-                adif--raw-modtime       (adif--raw-file-modtime file))
+          (setq adif--raw-source-file     file
+                adif--raw-parent-buffer   parent
+                adif--raw-record-index    idx
+                adif--raw-record-original rec
+                adif--raw-modtime         (adif--raw-file-modtime file))
           (setq header-line-format
                 (format "record %d   C-x C-s save   C-c C-c save and return   C-c C-k discard"
                         (1+ idx)))
@@ -2822,6 +3223,7 @@ If the edit is discarded, the placeholder record is removed."
                            (1+ idx) adif--source-file))
          (buf      (get-buffer-create buf-name)))
     (setq adif--records (append adif--records (list '())))
+    (adif--invalidate-view)
     (pop-to-buffer buf)
     (adif-record-edit-mode)
     (let ((inhibit-read-only t))
@@ -2831,12 +3233,12 @@ If the edit is discarded, the placeholder record is removed."
       (dolist (field adif-new-record-fields)
         (insert (format "%s: %s\n"
                         field
-                        (or (cdr (assq field adif-new-record-defaults)) "")))))
+                        (or (cdr (assq field adif-new-record-defaults)) ""))))
+      (adif--refresh-edit-buffer))
     (set-buffer-modified-p nil)
     (setq adif--edit-parent-buffer parent)
     (setq adif--edit-record-index  idx)
     (setq adif--edit-is-new        t)
-    (adif--annotate-buffer)
     ;; Leave point ready to type into the first templated field.
     (goto-char (point-min))
     (if (re-search-forward adif--field-line-regexp nil t)
@@ -2936,6 +3338,12 @@ data the operator may well have intended to keep."
 
 (defun adif--reload ()
   "Re-read the log file and rebuild the summary from it.
+
+The order and the filters in effect are kept: the sort is applied to
+what has just been read, and `adif--filter' is buffer-local and left
+alone, so a QSO appended by another program appears in its place in
+the view the operator had rather than resetting it.
+
 The visited modification time is updated to match, so that a write
 made afterwards is not mistaken for one racing another program."
   (let* ((parsed  (adif--parse-file adif--source-file))
@@ -2944,6 +3352,7 @@ made afterwards is not mistaken for one racing another program."
     (setq adif--header   header)
     (setq adif--records  records)
     (setq adif--warnings adif--parse-warnings))
+  (adif--invalidate-view)
   (adif--render-summary)
   (set-visited-file-modtime)
   (set-buffer-modified-p nil))
@@ -2969,6 +3378,9 @@ program, a script, a second Emacs.  Rewriting the file from records
 read before such an append would discard it silently, so the file's
 modification time is checked first and confirmation sought if it has
 moved."
+  ;; Every route that changes the records comes through here, so this is
+  ;; the one place the display order needs marking as out of date.
+  (adif--invalidate-view)
   (unless (verify-visited-file-modtime (current-buffer))
     (unless (yes-or-no-p
              (format "%s has changed on disk since it was read.  Overwrite those changes? "
@@ -3015,13 +3427,25 @@ than guessed at."
 ;; save would write the table over the operator's QSOs.
 (put 'adif--write-contents-function 'permanent-local-hook t)
 
-(defun adif-save ()
+(defun adif-save (&optional in-view-order)
   "Write the log to its file.
-Use this to make a reordering from \\[adif-sort-by-datetime] permanent;
-editing or deleting a record writes the file by itself."
-  (interactive)
+
+The records are written in the order the file gives them, whatever
+order they are displayed in.  With a prefix argument IN-VIEW-ORDER,
+write them in the displayed order instead, which makes a sort
+permanent.
+
+Editing, killing or yanking a record writes the file by itself."
+  (interactive "P")
+  (when in-view-order
+    (setq adif--records (adif--records-in-view-order))
+    (adif--invalidate-view))
   (adif--commit)
-  (message "Wrote %s  (%d records)" adif--source-file (length adif--records)))
+  ;; The rows carry positions in `adif--records', which have just moved;
+  ;; without a redisplay every row would name the wrong record.
+  (when in-view-order (adif--render-summary))
+  (message "Wrote %s  (%d records%s)" adif--source-file (length adif--records)
+           (if in-view-order ", in the displayed order" "")))
 
 (defun adif-revert ()
   "Re-read the ADIF file from disk and refresh the summary display."
@@ -3078,13 +3502,10 @@ files."
     (define-key map (kbd "i")   #'adif-new-record)
     (define-key map (kbd "n")   #'adif-next-record)
     (define-key map (kbd "p")   #'adif-previous-record)
-    ;; Kill, copy and yank, under both the single letter this sort of
-    ;; read-only listing uses and the key the same thing has when editing
-    ;; text.  The unit here is the record rather than the line.
-    (define-key map (kbd "k")   #'adif-kill-records)
+    ;; Kill, copy and yank under the keys they have when editing text,
+    ;; the unit here being the record rather than the line.
     (define-key map (kbd "C-k") #'adif-kill-records)
     (define-key map (kbd "M-w") #'adif-copy-records)
-    (define-key map (kbd "y")   #'adif-yank-records)
     (define-key map (kbd "C-y") #'adif-yank-records)
     (define-key map (kbd "?")   #'describe-mode)
     (define-key map (kbd "=")   #'adif-show-duplicates)
@@ -3140,7 +3561,7 @@ files."
      :enable adif--warnings]
     "--"
     ["Save Log"                 adif-save
-     :help "Write the log, making a sort order permanent"]
+     :help "Write the log in the order the file gives it"]
     ["Revert from Disk"         adif-revert
      :help "Re-read the file, discarding unwritten reordering"]
     ["New Log File..."          adif-create-file
@@ -3184,6 +3605,9 @@ affecting other records.
     (setq adif--header   header)
     (setq adif--records  records)
     (setq adif--warnings adif--parse-warnings))
+  ;; Adopt the default order before the first render, so the log appears
+  ;; the way it will stay: the sort is re-applied on every refresh.
+  (adif--init-sort)
   (adif--render-summary)
   (when adif-auto-revert
     (setq-local auto-revert-verbose nil)
