@@ -2,9 +2,10 @@
 
 ;; Copyright (C) 2026, David Pentrack
 ;; Author: David Pentrack
+;; Assisted-by: Claude Opus 5
 ;; URL: https://github.com/K6SM/adif-mode
 ;; Keywords: comm, hamradio, adif, logging
-;; Version: 1.0.1
+;; Version: 1.0.3
 ;; Package-Requires: ((emacs "25.1"))
 
 ;; This program is free software; you can redistribute it and/or modify
@@ -2294,10 +2295,10 @@ data already held in `adif--records'."
     ;; File / record-count header
     (push (propertize
            (if adif--filter
-               (format "ADIF Log: %s   [%d of %d records; %s]\n\n"
+               (format "ADIF Log   %s   %d of %d records; %s\nRET edit   i new   f filter   s sort   g revert   ? keys   q quit\n\n"
                        adif--source-file (adif--filtered-count) count
                        (adif--filter-description))
-             (format "ADIF Log: %s   [%d record%s]\n\n"
+             (format "ADIF Log   %s   %d record%s\nRET edit   i new   f filter   s sort   g revert   ? keys   q quit\n\n"
                      adif--source-file count (if (= 1 count) "" "s")))
            'face 'font-lock-comment-face)
           chunks)
@@ -2853,15 +2854,10 @@ the ADIF file.
         '((("^\\([A-Za-z_][A-Za-z0-9_]*\\):" 1 font-lock-keyword-face)
            ("^[A-Za-z_][A-Za-z0-9_]*:[[:space:]]*\\(.*\\)$"
             1 font-lock-string-face))))
-  (font-lock-mode 1)
-  (setq header-line-format
-        (substitute-command-keys
-         (concat "\\<adif-record-edit-mode-map>"
-                 "\\[adif-record-edit-save]: save  "
-                 "\\[adif-record-edit-discard]: discard  "
-                 "\\[adif-record-edit-add-field]: add field  "
-                 "\\[adif-record-edit-set-value]: set value  "
-                 "\\[adif-record-edit-kill-field]: kill field"))))
+  ;; No header line: the keys are already named on the second line of the
+  ;; buffer itself, and saying the same thing twice above it wasted a line
+  ;; of a small screen.
+  (font-lock-mode 1))
 
 ;;; ─── Main Mode Commands ───────────────────────────────────────────────────────
 
@@ -2873,13 +2869,20 @@ the ADIF file.
         (message "No record at point.")
       (let* ((rec   (nth idx adif--records))
              (parent   (current-buffer))
+             ;; Read before switching buffers: `adif--source-file' is
+             ;; local to the log buffer and is nil in the edit buffer.
+             (source   adif--source-file)
              (buf-name (format "*ADIF Record %d — %s*"
-                               (1+ idx) adif--source-file))
+                               (1+ idx) source))
              (buf      (get-buffer-create buf-name)))
         (pop-to-buffer buf)
         (adif-record-edit-mode)
         (let ((inhibit-read-only t))
           (erase-buffer)
+          (insert (propertize
+                   (format "Record %d   %s\nC-c C-c save   C-c C-k discard   C-c C-a add field   C-c C-v set value\n\n"
+                           (1+ idx) source)
+                   'face 'font-lock-comment-face))
           (insert (adif--record-to-edit-string rec))
           ;; Line the values up before the buffer is called unmodified,
           ;; or opening a record would leave it looking edited.
@@ -3219,8 +3222,10 @@ If the edit is discarded, the placeholder record is removed."
   (interactive)
   (let* ((parent   (current-buffer))
          (idx      (length adif--records))
+         ;; Read before switching buffers, as above.
+         (source   adif--source-file)
          (buf-name (format "*ADIF Record %d — %s*"
-                           (1+ idx) adif--source-file))
+                           (1+ idx) source))
          (buf      (get-buffer-create buf-name)))
     (setq adif--records (append adif--records (list '())))
     (adif--invalidate-view)
@@ -3228,8 +3233,10 @@ If the edit is discarded, the placeholder record is removed."
     (adif-record-edit-mode)
     (let ((inhibit-read-only t))
       (erase-buffer)
-      (insert "; New record -- empty fields are not written to the file.\n")
-      (insert "; C-c C-a adds a field, C-c C-v sets a value, C-c C-c saves.\n")
+      (insert (propertize
+               (format "New record   %s\nC-c C-c save   C-c C-k discard   C-c C-a add field   C-c C-v set value\n\n"
+                       source)
+               'face 'font-lock-comment-face))
       (dolist (field adif-new-record-fields)
         (insert (format "%s: %s\n"
                         field
