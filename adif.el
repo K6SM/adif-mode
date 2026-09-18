@@ -2,10 +2,10 @@
 
 ;; Copyright (C) 2026, David Pentrack
 ;; Author: David Pentrack
-;; Assisted-by: Claude Opus 5
+;; Assisted-by: claude-opus-5
 ;; URL: https://github.com/K6SM/adif-mode
 ;; Keywords: comm, hamradio, adif, logging
-;; Version: 1.0.3
+;; Version: 1.0.4
 ;; Package-Requires: ((emacs "25.1"))
 
 ;; This program is free software; you can redistribute it and/or modify
