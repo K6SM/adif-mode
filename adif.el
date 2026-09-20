@@ -2,7 +2,6 @@
 
 ;; Copyright (C) 2026, David Pentrack
 ;; Author: David Pentrack
-;; Assisted-by: claude-opus-5
 ;; URL: https://github.com/K6SM/adif-mode
 ;; Keywords: comm, hamradio, adif, logging
 ;; Version: 1.0.5
@@ -527,7 +526,7 @@ fields absent from this list can still be added at any time with
 
 QSO_DATE, TIME_ON and OPERATOR appear here as ordinary fields to be
 filled in.  A live logging program typically generates the first two
-at the moment a QSO is submitted; `adif-mode' does no such generation,
+at the moment a QSO is submitted; adif-mode does no such generation,
 since it edits logs after the fact.  OPERATOR starts from the value
 held in `adif-new-record-defaults'."
   :tag "ADIF New Record Fields"
@@ -1253,7 +1252,7 @@ An alist of (FIELD . VALUES).  A member of VALUES is either a bare
 CODE, where the code reads as its own description, or a cons of
 \\(CODE . DESCRIPTION).
 
-These tables belong to `adif-mode' itself and are not taken from any
+These tables belong to adif-mode itself and are not taken from any
 other package; see `adif-specification-version' for the release of the
 ADIF specification they follow.  Add to it or override it with
 `adif-field-values-extra' rather than editing it here, so that changes
@@ -1263,7 +1262,7 @@ survive an update.")
   "Additional or replacement enumerations, in the form of `adif-field-values'.
 
 An entry here takes precedence over the built-in table, so this serves
-both to describe a field `adif-mode' does not know about and to correct
+both to describe a field adif-mode does not know about and to correct
 one it does.  Run \\[adif-refresh-field-values] after changing it."
   :tag "ADIF Field Values Extra"
   :type '(alist :key-type (string :tag "Field")
@@ -1534,7 +1533,13 @@ not."
           ;; kept-old-versions and kept-new-versions; removing them is left
           ;; to the caller.
           (dolist (old discard)
-            (ignore-errors (delete-file old)))
+            ;; Only a file-error is passed over: a backup that cannot be
+            ;; pruned, because the directory is read-only or the file has
+            ;; gone already, is no reason to abandon the write.  Anything
+            ;; else is a fault in this package and is left to signal.
+            (condition-case nil
+                (delete-file old)
+              (file-error nil)))
           target)
       (error
        (unless (yes-or-no-p
@@ -1603,7 +1608,7 @@ re-read.  See `adif--compute-view'.")
 The display order is separate from the order the records are held in:
 sorting arranges this list, leaving `adif--records' as the file gave
 it, so the file is never rewritten in a different order than it had.
-Nil means it must be worked out again; see variable `adif--view'.")
+Nil means it must be worked out again; see `adif--view'.")
 
 (defvar-local adif--sort-active nil
   "Non-nil once an order has been chosen, by hand or by `adif-default-sort'.
@@ -1938,12 +1943,25 @@ view with \\[adif-delete-record]."
 (defvar adif--filter-history nil
   "History of values given to \\[adif-filter].")
 
+(defun adif--regexp-valid-p (regexp)
+  "Return non-nil when REGEXP is one Emacs can use."
+  (condition-case nil
+      (progn (string-match-p regexp "") t)
+    (invalid-regexp nil)))
+
 (defun adif--value-matches-p (value want)
-  "Return non-nil when VALUE satisfies WANT under `adif-filter-match'."
+  "Return non-nil when VALUE satisfies WANT under `adif-filter-match'.
+
+A malformed regexp is refused by \\[adif-filter] before it reaches
+here, so the guard below is for a filter set by other means, such as
+from Lisp.  Only `invalid-regexp' is passed over, and it yields no
+match rather than hiding a fault elsewhere in this package."
   (let ((case-fold-search t))
     (pcase adif-filter-match
       ('exact  (string-equal (upcase (string-trim value)) (upcase want)))
-      ('regexp (ignore-errors (string-match-p want value)))
+      ('regexp (condition-case nil
+                   (string-match-p want value)
+                 (invalid-regexp nil)))
       (_       (string-match-p (regexp-quote want) value)))))
 
 (defun adif--record-matches-filter-p (rec)
@@ -2007,6 +2025,13 @@ still orders the whole log."
                       (format "%s %s (empty drops this filter): "
                               field (adif--match-word))
                       existing 'adif--filter-history))))
+        ;; Caught here rather than record by record: a malformed regexp
+        ;; would otherwise simply match nothing, and an empty view looks
+        ;; like a log with no such QSO in it rather than a typing slip.
+        (when (and (eq adif-filter-match 'regexp)
+                   (not (string-empty-p value))
+                   (not (adif--regexp-valid-p value)))
+          (user-error "Not a regular expression Emacs can use: %s" value))
         (setq adif--filter
               (seq-remove (lambda (f) (equal (car f) field)) adif--filter))
         (unless (string-empty-p value)
@@ -3249,7 +3274,7 @@ If the edit is discarded, the placeholder record is removed."
     ;; Leave point ready to type into the first templated field.
     (goto-char (point-min))
     (if (re-search-forward adif--field-line-regexp nil t)
-        (goto-char (line-end-position))
+        (end-of-line)
       (goto-char (point-max)))))
 
 (defun adif-show-warnings ()
