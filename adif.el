@@ -2,9 +2,10 @@
 
 ;; Copyright (C) 2026, David Pentrack
 ;; Author: David Pentrack
+;; Assisted-by: claude-opus-5
 ;; URL: https://github.com/K6SM/adif-mode
 ;; Keywords: comm, hamradio, adif, logging
-;; Version: 1.0.5
+;; Version: 1.0.6
 ;; Package-Requires: ((emacs "25.1"))
 
 ;; This program is free software; you can redistribute it and/or modify
@@ -189,6 +190,20 @@
 ;;   valid codes are ever offered -- never a value entered earlier for
 ;;   this or any other field.  How strictly the list is enforced is set
 ;;   by `adif-require-known-values'.
+
+;; Use from other packages:
+;;   Another package that writes ADIF, such as a logger, can take the
+;;   specification from here rather than carrying its own copy.  These
+;;   are the supported interface, and will keep their meaning:
+;;
+;;     `adif-field-names'           every field name in the specification
+;;     `adif-field-values-for'      the valid codes for a field, with
+;;                                  their descriptions, or nil
+;;     `adif-record-to-string'      one record, lengths computed
+;;     `adif-file-header'           a new log's header, lengths computed
+;;     `adif-specification-version' the ADIF release the tables follow
+;;
+;;   Names containing a double hyphen are internal and may change.
 
 ;;; Code:
 
@@ -526,7 +541,7 @@ fields absent from this list can still be added at any time with
 
 QSO_DATE, TIME_ON and OPERATOR appear here as ordinary fields to be
 filled in.  A live logging program typically generates the first two
-at the moment a QSO is submitted; adif-mode does no such generation,
+at the moment a QSO is submitted; `adif-mode' does no such generation,
 since it edits logs after the fact.  OPERATOR starts from the value
 held in `adif-new-record-defaults'."
   :tag "ADIF New Record Fields"
@@ -1252,7 +1267,7 @@ An alist of (FIELD . VALUES).  A member of VALUES is either a bare
 CODE, where the code reads as its own description, or a cons of
 \\(CODE . DESCRIPTION).
 
-These tables belong to adif-mode itself and are not taken from any
+These tables belong to `adif-mode' itself and are not taken from any
 other package; see `adif-specification-version' for the release of the
 ADIF specification they follow.  Add to it or override it with
 `adif-field-values-extra' rather than editing it here, so that changes
@@ -1262,7 +1277,7 @@ survive an update.")
   "Additional or replacement enumerations, in the form of `adif-field-values'.
 
 An entry here takes precedence over the built-in table, so this serves
-both to describe a field adif-mode does not know about and to correct
+both to describe a field `adif-mode' does not know about and to correct
 one it does.  Run \\[adif-refresh-field-values] after changing it."
   :tag "ADIF Field Values Extra"
   :type '(alist :key-type (string :tag "Field")
@@ -1324,10 +1339,17 @@ A bare code is paired with itself."
                (cdr (assoc "DXCC" adif-field-values)))))
      (t nil))))
 
-(defun adif--field-values (field)
+(defun adif-field-values-for (field)
   "Return the list of (CODE . DESCRIPTION) pairs valid for FIELD, or nil.
+
+FIELD is an ADIF field name as a string, in either case.  The result
+takes in `adif-field-values-extra', so a package offering these values
+to its own users sees the same codes \[adif-record-edit-set-value]
+offers.  Nil means the field is free text.
+
 Results are cached; call `adif-refresh-field-values' after changing
-`adif-field-values-extra'."
+`adif-field-values-extra'.  This is part of the public interface; see
+the Commentary."
   (let* ((field  (upcase field))
          (cached (gethash field adif--field-values-cache 'miss)))
     (if (eq cached 'miss)
@@ -1494,9 +1516,14 @@ RECORDS is a list of alists, one per QSO record, in file order."
 
 ;;; ─── Serialisation ────────────────────────────────────────────────────────────
 
-(defun adif--alist-to-adif (alist)
+(defun adif-record-to-string (alist)
   "Serialise record ALIST to an ADIF string with correct field lengths.
-Fields with empty values are omitted.  The <EOR> tag is appended.
+
+ALIST holds (FIELD . VALUE) pairs of strings, FIELD in upper case.
+Fields with empty values are omitted, every length is counted from its
+value, and the <EOR> tag and a newline are appended, so the result can
+be appended to a log file as it stands.  This is part of the public
+interface; see the Commentary.
 
 Fields are written consecutively with no separator, one record per
 line, which is what logging programs commonly append and keeps the
@@ -1559,7 +1586,7 @@ so the file is never corrupted by prior edits."
       (insert "\n"))
     (dolist (rec records)
       (when rec
-        (insert (adif--alist-to-adif rec))))))
+        (insert (adif-record-to-string rec))))))
 
 ;;; ─── Ordering by Date and Time ────────────────────────────────────────────────
 
@@ -1608,7 +1635,7 @@ re-read.  See `adif--compute-view'.")
 The display order is separate from the order the records are held in:
 sorting arranges this list, leaving `adif--records' as the file gave
 it, so the file is never rewritten in a different order than it had.
-Nil means it must be worked out again; see `adif--view'.")
+Nil means it must be worked out again; see variable `adif--view'.")
 
 (defvar-local adif--sort-active nil
   "Non-nil once an order has been chosen, by hand or by `adif-default-sort'.
@@ -2063,21 +2090,25 @@ still orders the whole log."
 (defconst adif-mode-program-version "1.0.0"
   "Version written as PROGRAMVERSION into a log created here.")
 
-(defun adif--file-header ()
+(defun adif-file-header (&optional program version title)
   "Return the header for a newly created ADIF log.
 
-Every length is counted from the value it belongs to rather than
-written by hand, so the header cannot start life disagreeing with
-itself the way a typed-in one can."
-  (let ((ts   (format-time-string "%Y%m%d %H%M%S" nil t))
-        (prog "adif-mode"))
-    (concat adif-file-title "\n"
+PROGRAM and VERSION are written as PROGRAMID and PROGRAMVERSION, and
+TITLE as the free text ahead of the header fields; they default to
+this package's own name, `adif-mode-program-version' and
+`adif-file-title'.  Every length is counted from the value it belongs
+to rather than written by hand, so the header cannot start life
+disagreeing with itself the way a typed-in one can.  This is part of
+the public interface; see the Commentary."
+  (let ((ts      (format-time-string "%Y%m%d %H%M%S" nil t))
+        (prog    (or program "adif-mode"))
+        (version (or version adif-mode-program-version)))
+    (concat (or title adif-file-title) "\n"
             (format "<ADIF_VER:%d>%s\n"
                     (length adif-specification-version) adif-specification-version)
             (format "<CREATED_TIMESTAMP:%d>%s\n" (length ts) ts)
             (format "<PROGRAMID:%d>%s\n" (length prog) prog)
-            (format "<PROGRAMVERSION:%d>%s\n"
-                    (length adif-mode-program-version) adif-mode-program-version)
+            (format "<PROGRAMVERSION:%d>%s\n" (length version) version)
             "<EOH>\n")))
 
 ;;;###autoload
@@ -2096,7 +2127,7 @@ with \\[adif-copy-records] and yanking them here with
     (unless (file-directory-p dir)
       (user-error "No directory %s" dir)))
   (with-temp-file file
-    (insert (adif--file-header)))
+    (insert (adif-file-header)))
   (find-file file)
   (message "Created %s; n adds a record, y yanks records copied from another log"
            (file-name-nondirectory file)))
@@ -2654,7 +2685,7 @@ the values in front of them are."
           (let* ((field  (upcase (match-string 1)))
                  (value  (string-trim (match-string 2)))
                  (values (unless (string-empty-p value)
-                           (adif--field-values field)))
+                           (adif-field-values-for field)))
                  (desc   (cdr (assoc value values))))
             (when (and desc (not (string= desc value)))
               (push (list (line-end-position)
@@ -2691,7 +2722,7 @@ read as free text pre-filled with its current value."
       (when (looking-at adif--field-line-regexp)
         (let* ((field   (upcase (match-string 1)))
                (current (string-trim (match-string 2)))
-               (values  (adif--field-values field))
+               (values  (adif-field-values-for field))
                (new     (adif--read-field-value field current values)))
           (when new
             (delete-region (line-beginning-position) (line-end-position))
@@ -2711,7 +2742,7 @@ immediately using completion over the plain-English descriptions."
   (let* ((raw   (completing-read "Field name: " adif-field-names nil nil))
          (field (upcase (string-trim raw))))
     (when (and field (not (string-empty-p field)))
-      (let* ((values (adif--field-values field))
+      (let* ((values (adif-field-values-for field))
              (value  (if values
                          (adif--read-field-value field "" values)
                        "")))
@@ -2819,7 +2850,7 @@ values that field accepts are offered, annotated with their meanings."
      ((string-match "\\`\\([A-Za-z_][A-Za-z0-9_]*\\):[ \t]*" head)
       (let* ((field  (upcase (match-string 1 head)))
              (vstart (+ bol (match-end 0)))
-             (values (adif--field-values field)))
+             (values (adif-field-values-for field)))
         (when values
           (list vstart pos (mapcar #'car values)
                 :annotation-function
@@ -3189,7 +3220,7 @@ log view reports any that no longer agree once the record is written."
         (with-current-buffer buf
           (let ((inhibit-read-only t))
             (erase-buffer)
-            (insert (adif--alist-to-adif rec)))
+            (insert (adif-record-to-string rec)))
           (adif-raw-mode)
           (setq adif--raw-source-file     file
                 adif--raw-parent-buffer   parent
