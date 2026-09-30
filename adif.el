@@ -5,7 +5,7 @@
 ;; Assisted-by: claude-opus-5
 ;; URL: https://github.com/K6SM/adif-mode
 ;; Keywords: comm, hamradio, adif, logging
-;; Version: 1.0.6
+;; Version: 1.0.8
 ;; Package-Requires: ((emacs "25.1"))
 
 ;; This program is free software; you can redistribute it and/or modify
@@ -202,6 +202,11 @@
 ;;     `adif-record-to-string'      one record, lengths computed
 ;;     `adif-file-header'           a new log's header, lengths computed
 ;;     `adif-specification-version' the ADIF release the tables follow
+;;     `adif-field-type'            a field's data type, such as Date
+;;     `adif-field-import-only-p'   whether a field is not to be written
+;;     `adif-value-import-only-p'   whether a code is not to be written
+;;     `adif-value-problem'         what is wrong with one value, or nil
+;;     `adif-record-problems'       what is wrong with a whole record
 ;;
 ;;   Names containing a double hyphen are internal and may change.
 
@@ -1163,7 +1168,9 @@ the release the field and value lists were taken from.")
      (
       ("Y" . "yes") ("N" . "no") ("R" . "requested") ("Q" . "queued")
       ("I" . "ignore or invalid")))
-    ("QSL_VIA" .
+    ;; The QSL_Via enumeration, shared with QSL_SENT_VIA.  It is not filed
+    ;; as QSL_VIA: that field is free text, the route a QSL should take.
+    ("QSL_RCVD_VIA" .
      (
       ("B" . "bureau") ("D" . "direct") ("E" . "electronic")
       ("M" . "manager (import-only)")))
@@ -1306,8 +1313,7 @@ one it does.  Run \\[adif-refresh-field-values] after changing it."
     ("MY_MORSE_KEY_TYPE" . "MORSE_KEY_TYPE")
     ("QRZCOM_QSO_DOWNLOAD_STATUS" . "QSO_DOWNLOAD_STATUS")
     ("QRZCOM_QSO_UPLOAD_STATUS" . "QSO_UPLOAD_STATUS")
-    ("QSL_RCVD_VIA" . "QSL_VIA")
-    ("QSL_SENT_VIA" . "QSL_VIA"))
+    ("QSL_SENT_VIA" . "QSL_RCVD_VIA"))
   "Alist mapping a FIELD to another field whose value list it shares.
 Taken from the Enumeration column of the field table in the ADIF
 specification, so that MY_DXCC is validated against the DXCC list,
@@ -1333,10 +1339,19 @@ A bare code is paired with itself."
      ;; COUNTRY holds the name of a DXCC entity.  Deriving those names from
      ;; the DXCC table costs one pass on first use and keeps four hundred
      ;; duplicated strings out of the file, with one place to correct them.
+     ;; A deleted entity's description ends in "(deleted)", which is no
+     ;; part of its name, so it is kept to the description.  COMOROS and
+     ;; PALESTINE have each been both, and appear once.
      ((string= field "COUNTRY")
-      (mapcar (lambda (pair) (cons (cdr pair) (cdr pair)))
-              (adif--normalize-values
-               (cdr (assoc "DXCC" adif-field-values)))))
+      (let ((names '()))
+        (dolist (pair (adif--normalize-values
+                       (cdr (assoc "DXCC" adif-field-values))))
+          (let* ((deleted (string-match " (deleted)\\'" (cdr pair)))
+                 (name (if deleted (substring (cdr pair) 0 deleted) (cdr pair)))
+                 (known (assoc name names)))
+            (cond ((not known) (push (cons name (cdr pair)) names))
+                  ((not deleted) (setcdr known name)))))
+        (nreverse names)))
      (t nil))))
 
 (defun adif-field-values-for (field)
@@ -1371,6 +1386,300 @@ Run this after editing `adif-field-values-extra'."
   (interactive)
   (clrhash adif--field-values-cache)
   (message "ADIF field value tables refreshed."))
+
+;;; ─── Field Data Types ─────────────────────────────────────────────────────────
+
+(defconst adif-field-types
+  '(("ADDRESS" MultilineString) ("ADDRESS_INTL" IntlMultilineString)
+    ("AGE" Number :min 0 :max 120) ("ALTITUDE" Number)
+    ("ANT_AZ" Number :min 0 :max 360) ("ANT_EL" Number :min -90 :max 90)
+    ("ANT_PATH" Enumeration) ("ARRL_SECT" Enumeration)
+    ("AWARD_GRANTED" SponsoredAwardList)
+    ("AWARD_SUBMITTED" SponsoredAwardList) ("A_INDEX" Number :min 0 :max 400)
+    ("BAND" Enumeration) ("BAND_RX" Enumeration) ("CALL" String)
+    ("CHECK" String) ("CLASS" String) ("CLUBLOG_QSO_UPLOAD_DATE" Date)
+    ("CLUBLOG_QSO_UPLOAD_STATUS" Enumeration) ("CNTY" Enumeration)
+    ("CNTY_ALT" SecondaryAdministrativeSubdivisionListAlt) ("COMMENT" String)
+    ("COMMENT_INTL" IntlString) ("CONT" Enumeration) ("CONTACTED_OP" String)
+    ("CONTEST_ID" String) ("COUNTRY" String) ("COUNTRY_INTL" IntlString)
+    ("CQZ" PositiveInteger :min 1 :max 40) ("CREDIT_GRANTED" CreditList)
+    ("CREDIT_SUBMITTED" CreditList) ("DARC_DOK" Enumeration)
+    ("DCL_QSLRDATE" Date) ("DCL_QSLSDATE" Date) ("DCL_QSL_RCVD" Enumeration)
+    ("DCL_QSL_SENT" Enumeration) ("DISTANCE" Number :min 0)
+    ("DXCC" Enumeration) ("EMAIL" String) ("EQSL_AG" Enumeration)
+    ("EQSL_QSLRDATE" Date) ("EQSL_QSLSDATE" Date)
+    ("EQSL_QSL_RCVD" Enumeration) ("EQSL_QSL_SENT" Enumeration)
+    ("EQ_CALL" String) ("FISTS" PositiveInteger)
+    ("FISTS_CC" PositiveInteger) ("FORCE_INIT" Boolean) ("FREQ" Number)
+    ("FREQ_RX" Number) ("GRIDSQUARE" GridSquare)
+    ("GRIDSQUARE_EXT" GridSquareExt) ("GUEST_OP" String :import-only t)
+    ("HAMLOGEU_QSO_UPLOAD_DATE" Date)
+    ("HAMLOGEU_QSO_UPLOAD_STATUS" Enumeration) ("HAMQTH_QSO_UPLOAD_DATE" Date)
+    ("HAMQTH_QSO_UPLOAD_STATUS" Enumeration) ("HRDLOG_QSO_UPLOAD_DATE" Date)
+    ("HRDLOG_QSO_UPLOAD_STATUS" Enumeration) ("IOTA" IOTARefNo)
+    ("IOTA_ISLAND_ID" PositiveInteger :min 1 :max 99999999)
+    ("ITUZ" PositiveInteger :min 1 :max 90) ("K_INDEX" Integer :min 0 :max 9)
+    ("LAT" Location) ("LON" Location) ("LOTW_QSLRDATE" Date)
+    ("LOTW_QSLSDATE" Date) ("LOTW_QSL_RCVD" Enumeration)
+    ("LOTW_QSL_SENT" Enumeration) ("MAX_BURSTS" Number :min 0)
+    ("MODE" Enumeration) ("MORSE_KEY_INFO" String)
+    ("MORSE_KEY_TYPE" Enumeration) ("MS_SHOWER" String) ("MY_ALTITUDE" Number)
+    ("MY_ANTENNA" String) ("MY_ANTENNA_INTL" IntlString)
+    ("MY_ARRL_SECT" Enumeration) ("MY_CITY" String)
+    ("MY_CITY_INTL" IntlString) ("MY_CNTY" Enumeration)
+    ("MY_CNTY_ALT" SecondaryAdministrativeSubdivisionListAlt)
+    ("MY_COUNTRY" String) ("MY_COUNTRY_INTL" IntlString)
+    ("MY_CQ_ZONE" PositiveInteger :min 1 :max 40) ("MY_DARC_DOK" Enumeration)
+    ("MY_DXCC" Enumeration) ("MY_FISTS" PositiveInteger)
+    ("MY_GRIDSQUARE" GridSquare) ("MY_GRIDSQUARE_EXT" GridSquareExt)
+    ("MY_IOTA" IOTARefNo)
+    ("MY_IOTA_ISLAND_ID" PositiveInteger :min 1 :max 99999999)
+    ("MY_ITU_ZONE" PositiveInteger :min 1 :max 90) ("MY_LAT" Location)
+    ("MY_LON" Location) ("MY_MORSE_KEY_INFO" String)
+    ("MY_MORSE_KEY_TYPE" Enumeration) ("MY_NAME" String)
+    ("MY_NAME_INTL" IntlString) ("MY_POSTAL_CODE" String)
+    ("MY_POSTAL_CODE_INTL" IntlString) ("MY_POTA_REF" POTARefList)
+    ("MY_RIG" String) ("MY_RIG_INTL" IntlString) ("MY_SIG" String)
+    ("MY_SIG_INFO" String) ("MY_SIG_INFO_INTL" IntlString)
+    ("MY_SIG_INTL" IntlString) ("MY_SOTA_REF" SOTARef)
+    ("MY_STATE" Enumeration) ("MY_STREET" String)
+    ("MY_STREET_INTL" IntlString)
+    ("MY_USACA_COUNTIES" SecondarySubdivisionList)
+    ("MY_VUCC_GRIDS" GridSquareList) ("MY_WWFF_REF" WWFFRef) ("NAME" String)
+    ("NAME_INTL" IntlString) ("NOTES" MultilineString)
+    ("NOTES_INTL" IntlMultilineString) ("NR_BURSTS" Integer :min 0)
+    ("NR_PINGS" Integer :min 0) ("OPERATOR" String) ("OWNER_CALLSIGN" String)
+    ("PFX" String) ("POTA_REF" POTARefList) ("PRECEDENCE" String)
+    ("PROP_MODE" Enumeration) ("PUBLIC_KEY" String)
+    ("QRZCOM_QSO_DOWNLOAD_DATE" Date)
+    ("QRZCOM_QSO_DOWNLOAD_STATUS" Enumeration) ("QRZCOM_QSO_UPLOAD_DATE" Date)
+    ("QRZCOM_QSO_UPLOAD_STATUS" Enumeration) ("QSLMSG" MultilineString)
+    ("QSLMSG_INTL" IntlMultilineString) ("QSLMSG_RCVD" MultilineString)
+    ("QSLRDATE" Date) ("QSLSDATE" Date) ("QSL_RCVD" Enumeration)
+    ("QSL_RCVD_VIA" Enumeration) ("QSL_SENT" Enumeration)
+    ("QSL_SENT_VIA" Enumeration) ("QSL_VIA" String)
+    ("QSO_COMPLETE" Enumeration) ("QSO_DATE" Date) ("QSO_DATE_OFF" Date)
+    ("QSO_RANDOM" Boolean) ("QTH" String) ("QTH_INTL" IntlString)
+    ("REGION" Enumeration) ("RIG" MultilineString)
+    ("RIG_INTL" IntlMultilineString) ("RST_RCVD" String) ("RST_SENT" String)
+    ("RX_PWR" Number :min 0) ("SAT_MODE" String) ("SAT_NAME" String)
+    ("SFI" Integer :min 0 :max 300) ("SIG" String) ("SIG_INFO" String)
+    ("SIG_INFO_INTL" IntlString) ("SIG_INTL" IntlString)
+    ("SILENT_KEY" Boolean) ("SKCC" String) ("SOTA_REF" SOTARef)
+    ("SRX" Integer :min 0) ("SRX_STRING" String) ("STATE" Enumeration)
+    ("STATION_CALLSIGN" String) ("STX" Integer :min 0) ("STX_STRING" String)
+    ("SUBMODE" String) ("SWL" Boolean) ("TEN_TEN" PositiveInteger)
+    ("TIME_OFF" Time) ("TIME_ON" Time) ("TX_PWR" Number :min 0)
+    ("UKSMG" PositiveInteger)
+    ("USACA_COUNTIES" SecondarySubdivisionList)
+    ("VE_PROV" String :import-only t) ("VUCC_GRIDS" GridSquareList)
+    ("WEB" String) ("WWFF_REF" WWFFRef))
+  "The ADIF data type of every field in `adif-field-names'.
+
+Each entry is (FIELD TYPE . PROPERTIES).  TYPE is the specification's
+name for the field's data type, as a symbol: Date or PositiveInteger,
+for instance.  PROPERTIES may give :min and :max, the range a numeric
+field allows, and :import-only, marking a field that may be read from
+an old log but is not to be written to a new one.  Taken from the field
+table of the ADIF specification named by `adif-specification-version'.")
+
+(defun adif-field-type (field)
+  "Return the ADIF data type of FIELD as a symbol, or nil.
+
+FIELD is a field name in either case.  The type is one of those in
+`adif-field-types', such as Date, Number or Enumeration.  Nil means the
+specification does not define FIELD; an APP_ field, for instance.  This
+is part of the public interface; see the Commentary."
+  (cadr (assoc (upcase field) adif-field-types)))
+
+(defun adif-field-import-only-p (field)
+  "Return non-nil when FIELD may be read from a log but not written to one.
+FIELD is a field name in either case.  This is part of the public
+interface; see the Commentary."
+  (plist-get (cddr (assoc (upcase field) adif-field-types)) :import-only))
+
+(defun adif-value-import-only-p (field value)
+  "Return non-nil when VALUE is one of FIELD's codes marked import-only.
+Such a code may be read from an old log but is not to be written to a
+new one.  FIELD is a field name in either case.  This is part of the
+public interface; see the Commentary."
+  (let ((entry (assoc-string value (adif-field-values-for field) t)))
+    ;; The table marks such a code in its description, sometimes as the
+    ;; whole description and sometimes at the end of a longer one.
+    (and entry (cdr entry)
+         (string-match-p "import-only" (cdr entry))
+         t)))
+
+(defun adif--days-in-month (year month)
+  "Return the number of days in MONTH of YEAR."
+  (cond ((= month 2)
+         (if (and (= 0 (% year 4))
+                  (or (/= 0 (% year 100)) (= 0 (% year 400))))
+             29
+           28))
+        ((memq month '(4 6 9 11)) 30)
+        (t 31)))
+
+(defun adif--list-problem (value regexp)
+  "Return non-nil unless every comma-separated item of VALUE matches REGEXP."
+  (seq-some (lambda (item) (not (string-match-p regexp item)))
+            (split-string value ",")))
+
+(defconst adif--grid-regexp
+  "\\`[A-R]\\{2\\}\\(?:[0-9]\\{2\\}\\(?:[A-X]\\{2\\}\\(?:[0-9]\\{2\\}\\)?\\)?\\)?\\'"
+  "A 2, 4, 6 or 8 character Maidenhead locator, matched ignoring case.")
+
+(defun adif--type-problem (type field value)
+  "Return why VALUE is not of ADIF data TYPE, as a phrase, or nil.
+FIELD names the field, for an Enumeration's list of codes."
+  (let ((case-fold-search t))
+    (cond
+     ((eq type 'Boolean)
+      (unless (string-match-p "\\`[YN]\\'" value) "is not Y or N"))
+     ((eq type 'Digit)
+      (unless (string-match-p "\\`[0-9]\\'" value) "is not a single digit"))
+     ((eq type 'Integer)
+      (unless (string-match-p "\\`-?[0-9]+\\'" value) "is not a whole number"))
+     ((eq type 'PositiveInteger)
+      (unless (and (string-match-p "\\`[0-9]+\\'" value)
+                   (> (string-to-number value) 0))
+        "is not a whole number above zero"))
+     ((eq type 'Number)
+      (unless (string-match-p
+               "\\`-?\\(?:[0-9]+\\(?:\\.[0-9]*\\)?\\|\\.[0-9]+\\)\\'" value)
+        "is not a number"))
+     ((eq type 'Date)
+      (if (not (string-match "\\`\\([0-9]\\{4\\}\\)\\([0-9]\\{2\\}\\)\\([0-9]\\{2\\}\\)\\'"
+                             value))
+          "is not a date as YYYYMMDD"
+        (let ((year  (string-to-number (match-string 1 value)))
+              (month (string-to-number (match-string 2 value)))
+              (day   (string-to-number (match-string 3 value))))
+          (cond ((< year 1930) "is before 1930")
+                ((or (< month 1) (> month 12)
+                     (< day 1) (> day (adif--days-in-month year month)))
+                 "is not a date as YYYYMMDD")))))
+     ((eq type 'Time)
+      (unless (and (string-match "\\`\\([0-9]\\{2\\}\\)\\([0-9]\\{2\\}\\)\\([0-9]\\{2\\}\\)?\\'"
+                                 value)
+                   (<= (string-to-number (match-string 1 value)) 23)
+                   (<= (string-to-number (match-string 2 value)) 59)
+                   (or (null (match-string 3 value))
+                       (<= (string-to-number (match-string 3 value)) 59)))
+        "is not a time as HHMM or HHMMSS"))
+     ((eq type 'GridSquare)
+      (unless (string-match-p adif--grid-regexp value)
+        "is not a Maidenhead locator"))
+     ((eq type 'GridSquareExt)
+      (unless (string-match-p "\\`[A-X]\\{2\\}\\(?:[0-9]\\{2\\}\\)?\\'" value)
+        "is not the extension of a Maidenhead locator"))
+     ((eq type 'GridSquareList)
+      (when (adif--list-problem value adif--grid-regexp)
+        "is not a comma-separated list of Maidenhead locators"))
+     ((eq type 'Location)
+      (unless (and (string-match
+                    "\\`[NSEW]\\([0-9]\\{3\\}\\) \\([0-9]\\{2\\}\\)\\.[0-9]\\{3\\}\\'" value)
+                   (<= (string-to-number (match-string 1 value)) 180)
+                   (<= (string-to-number (match-string 2 value)) 59))
+        "is not a position as XDDD MM.MMM"))
+     ((eq type 'IOTARefNo)
+      (unless (and (string-match
+                    "\\`\\(?:AF\\|AN\\|AS\\|EU\\|NA\\|OC\\|SA\\)-\\([0-9]\\{3\\}\\)\\'" value)
+                   (> (string-to-number (match-string 1 value)) 0))
+        "is not an IOTA reference such as EU-005"))
+     ((eq type 'POTARefList)
+      (when (adif--list-problem
+             value "\\`[A-Z0-9]\\{1,4\\}-[0-9]\\{4,5\\}\\(?:@[A-Z0-9-]\\{4,6\\}\\)?\\'")
+        "is not a list of POTA references such as K-0059"))
+     ((eq type 'SOTARef)
+      (unless (string-match-p "\\`[A-Z0-9]+/[A-Z0-9]+-[0-9]+\\'" value)
+        "is not a SOTA reference such as W2/WE-003"))
+     ((eq type 'WWFFRef)
+      (unless (string-match-p "\\`[A-Z0-9]\\{1,4\\}FF-[0-9]\\{4\\}\\'" value)
+        "is not a WWFF reference such as KFF-4655"))
+     ((eq type 'Enumeration)
+      ;; Only where adif holds the codes: STATE and CNTY depend on DXCC.
+      (let ((values (adif-field-values-for field)))
+        (when (and values (not (assoc-string value values t)))
+          "is not one of its codes")))
+     ((eq type 'MultilineString)
+      (when (string-match "[^ -~\r\n]" value)
+        (format "holds %s, which is not printable ASCII"
+                (match-string 0 value))))
+     ((memq type '(IntlString IntlCharacter))
+      (when (string-match-p "[\r\n]" value) "holds a line break"))
+     ((eq type 'IntlMultilineString) nil)
+     ;; String, Character, and the lists whose members adif does not
+     ;; hold: CreditList, SponsoredAwardList and the subdivision lists.
+     (t
+      (when (string-match "[^ -~]" value)
+        (format "holds %s, which is not printable ASCII"
+                (match-string 0 value)))))))
+
+(defun adif--field-problem (field value)
+  "Return why VALUE breaks a rule the specification gives for FIELD alone.
+The answer is a phrase, or nil.  Checked after VALUE's data type."
+  (cond
+   ;; The field table: two or four locators, each four or six characters.
+   ((member field '("VUCC_GRIDS" "MY_VUCC_GRIDS"))
+    (let ((grids (split-string value ",")))
+      (unless (and (memq (length grids) '(2 4))
+                   (seq-every-p (lambda (g) (memq (length g) '(4 6))) grids))
+        "is not two or four locators of four or six characters")))))
+
+(defun adif-value-problem (field value)
+  "Return what is wrong with VALUE for FIELD, or nil if nothing is.
+
+FIELD is a field name in either case and VALUE a string.  The answer
+names both, as in \"QSO_DATE 20241301 is not a date as YYYYMMDD\", for
+showing to whoever entered it.  An empty VALUE, or a field the
+specification does not define, has nothing wrong with it.
+
+Checked are the field's data type, per `adif-field-types'; the range a
+numeric field allows; and, for an Enumeration field whose codes adif
+holds, that VALUE is one of them.  A field of type String that offers a
+list, such as CONTEST_ID or SUBMODE, may hold values beyond the list,
+so those are not questioned.  This is part of the public interface; see
+the Commentary."
+  (let* ((field (upcase field))
+         (entry (assoc field adif-field-types))
+         (type (cadr entry))
+         (props (cddr entry)))
+    (when (and type (not (string-empty-p value)))
+      (let ((problem
+             (or (adif--type-problem type field value)
+                 (adif--field-problem field value)
+                 (let ((min (plist-get props :min))
+                       (max (plist-get props :max))
+                       (number (string-to-number value)))
+                   (cond ((and min (< number min)) (format "is below %s" min))
+                         ((and max (> number max)) (format "is above %s" max)))))))
+        (when problem
+          (format "%s %s %s" field value problem))))))
+
+(defun adif-record-problems (alist)
+  "Return a list of what is wrong with the record ALIST, or nil.
+
+ALIST holds (FIELD . VALUE) pairs of strings, as `adif-record-to-string'
+takes them.  Each field is checked by `adif-value-problem', and a
+SUBMODE is checked against the MODE it belongs to.  This is part of the
+public interface; see the Commentary."
+  (let ((problems (delq nil (mapcar (lambda (pair)
+                                      (adif-value-problem (car pair) (cdr pair)))
+                                    alist)))
+        (mode (cdr (assoc-string "MODE" alist t)))
+        (submode (cdr (assoc-string "SUBMODE" alist t))))
+    ;; Each SUBMODE's description in the table is the MODE it belongs to.
+    (when (and mode submode
+               (not (string-empty-p mode)) (not (string-empty-p submode)))
+      (let ((owner (cdr (assoc-string submode (adif-field-values-for "SUBMODE") t))))
+        (when (and owner
+                   (not (eq t (compare-strings owner nil nil mode nil nil t))))
+          (setq problems
+                (append problems
+                        (list (format "SUBMODE %s belongs to MODE %s, not %s"
+                                      submode owner mode)))))))
+    problems))
 
 ;;; ─── Buffer-local State (summary buffer) ─────────────────────────────────────
 
@@ -2087,8 +2396,9 @@ still orders the whole log."
 
 ;;; ─── Creating a Log ───────────────────────────────────────────────────────────
 
-(defconst adif-mode-program-version "1.0.0"
-  "Version written as PROGRAMVERSION into a log created here.")
+(defconst adif-mode-program-version "1.0.8"
+  "Version written as PROGRAMVERSION into a log created here.
+Kept the same as the Version line at the top of this file.")
 
 (defun adif-file-header (&optional program version title)
   "Return the header for a newly created ADIF log.

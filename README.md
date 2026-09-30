@@ -196,11 +196,30 @@ so a single list would accept an Alabama county for a Canadian contact.
 AWARD and CREDIT hold comma-separated lists rather than single values
 and are also left as free text.
 
+## Use from other packages
+
+These functions and variables are a stable interface for packages that
+write ADIF:
+
+| Name | Returns |
+|------|---------|
+| `adif-field-names` | Every field name in the specification |
+| `adif-field-values-for` | A field's codes and their meanings, or nil |
+| `adif-field-type` | A field's data type, such as `Date` or `Number` |
+| `adif-value-problem` | What is wrong with one value, or nil |
+| `adif-record-problems` | What is wrong with a record, including a SUBMODE under the wrong MODE |
+| `adif-value-import-only-p` | Whether a code may be read but not written |
+| `adif-field-import-only-p` | Whether a field may be read but not written |
+| `adif-record-to-string` | One record, with its field lengths |
+| `adif-file-header` | The header for a new log |
+| `adif-specification-version` | The ADIF release the tables follow |
+
 ## qso.el
 
 [qso.el](https://github.com/K6SM/Emacs-QSO-Logger) is a companion for
 logging QSOs, from the same author, but entirely optional; adif-mode
-edits logs regardless of what wrote them.
+edits logs regardless of what wrote them. qso.el requires adif-mode and
+takes its fields, values and checks from it.
 
 ## License
 
